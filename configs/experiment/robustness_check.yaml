@@ -1,0 +1,35 @@
+# Robustness checks: different datasets, models, and heterogeneity types.
+# Verifies that superadditivity is not an artifact of one specific setup.
+
+experiment_name: robustness_check
+
+checks:
+  cifar10_factorial:
+    data_levels: [cifar10_iid, cifar10_noniid]
+    network_levels: [erdos_renyi, sbm_medium]
+    model: resnet18
+
+  emnist_factorial:
+    data_levels: [emnist_iid, emnist_noniid]
+    network_levels: [erdos_renyi, sbm_medium]
+    model: resnet18
+
+  convnet_factorial:
+    data_levels: [iid, moderate_noniid]
+    network_levels: [erdos_renyi, sbm_medium]
+    model: convnet
+
+  quantity_skew_control:
+    data_levels: [iid, quantity_skew]
+    network_levels: [erdos_renyi, sbm_medium]
+    model: resnet18
+
+  watts_strogatz_factorial:
+    data_levels: [iid, moderate_noniid]
+    network_levels: [erdos_renyi, watts_strogatz]
+    model: resnet18
+
+run_seeds: [42, 123, 456]
+graph_seeds: [100, 200]
+
+training: default

@@ -1,0 +1,40 @@
+# Core 2×2 factorial experiment:
+#   Factor A (data): IID vs Non-IID (alpha=0.5)
+#   Factor B (network): Dense (ER) vs Community (SBM medium)
+#
+# Cells:
+#   A: IID + ER          (both benign)
+#   B: Non-IID + ER      (data heterogeneity only)
+#   C: IID + SBM         (network heterogeneity only)
+#   D: Non-IID + SBM     (both present — test for superadditivity)
+#
+# 5 run_seeds × 3 graph_seeds per cell = 15 runs per cell = 60 total.
+
+experiment_name: core_factorial
+
+cells:
+  A_iid_er:
+    data: iid
+    graph: erdos_renyi
+    label: "IID + Dense"
+
+  B_noniid_er:
+    data: moderate_noniid
+    graph: erdos_renyi
+    label: "Non-IID + Dense"
+
+  C_iid_sbm:
+    data: iid
+    graph: sbm_medium
+    label: "IID + Community"
+
+  D_noniid_sbm:
+    data: moderate_noniid
+    graph: sbm_medium
+    label: "Non-IID + Community"
+
+run_seeds: [42, 123, 456, 789, 2024]
+graph_seeds: [100, 200, 300]
+
+model: resnet18
+training: default

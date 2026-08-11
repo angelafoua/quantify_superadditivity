@@ -1,0 +1,4 @@
+topology: erdos_renyi
+n_nodes: 128
+edge_probability: null  # auto-matched to SBM expected density
+seed: ${graph_seed}

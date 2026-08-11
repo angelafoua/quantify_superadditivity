@@ -1,0 +1,5 @@
+topology: watts_strogatz
+n_nodes: 128
+k_neighbors: 8
+rewire_prob: 0.1
+seed: ${graph_seed}

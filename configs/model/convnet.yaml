@@ -1,0 +1,3 @@
+architecture: convnet4
+n_classes: ${data.n_classes}
+keep_on_device: true

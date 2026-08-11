@@ -1,0 +1,15 @@
+defaults:
+  - data: moderate_noniid
+  - graph: sbm_medium
+  - model: resnet18
+  - training: default
+  - _self_
+
+experiment_name: superadditivity_experiment
+output_dir: outputs/${experiment_name}
+
+n_clients: 128
+n_communities: 4
+
+run_seed: 42
+graph_seed: 100
