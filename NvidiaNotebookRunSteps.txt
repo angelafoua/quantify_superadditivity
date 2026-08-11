@@ -1,0 +1,121 @@
+# ============================================================
+# Nvidia Server Setup Steps for Superadditivity Experiments
+# ============================================================
+#
+# These steps set up the environment on the Nvidia DGX/GPU server
+# for running the full superadditivity experiment suite.
+#
+# Tested on: Ubuntu 22.04 with CUDA 12.x, Python 3.10+
+# ============================================================
+
+# 1. Create and activate virtual environment
+# -------------------------------------------
+python3 -m venv venv_superadditivity
+source venv_superadditivity/bin/activate
+
+# 2. Upgrade pip
+# -------------------------------------------
+pip install --upgrade pip
+
+# 3. Install PyTorch with CUDA support
+# -------------------------------------------
+# Adjust the CUDA version to match your server's CUDA toolkit.
+# For CUDA 12.1:
+pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121
+
+# 4. Install project dependencies
+# -------------------------------------------
+pip install -r requirements.txt
+
+# 5. Version fixes (if needed)
+# -------------------------------------------
+# Some dependency versions may conflict. Apply these fixes if you
+# encounter errors:
+pip install numpy==1.26.4         # numpy 1.24 may conflict with torch 2.1
+pip install h5py==3.10.0          # newer h5py for numpy compat
+pip install statsmodels==0.14.1   # newer statsmodels for stability
+pip install matplotlib==3.8.4     # newer matplotlib for seaborn compat
+
+# 6. Install the package in development mode
+# -------------------------------------------
+pip install -e .
+
+# 7. Verify the installation
+# -------------------------------------------
+python scripts/validate_setup.py
+
+# 8. Set up Jupyter kernel (if using notebooks)
+# -------------------------------------------
+pip install ipykernel
+python -m ipykernel install --user --name superadditivity --display-name "Superadditivity"
+
+# ============================================================
+# Running Experiments
+# ============================================================
+
+# Quick test (single run, small config):
+python scripts/run_experiment.py data=iid graph=erdos_renyi training.total_rounds=5
+
+# Core 2×2 factorial (60 runs total):
+python scripts/run_sweep.py --experiment core_factorial
+
+# Extended 4×4 grid (240 runs total):
+python scripts/run_sweep.py --experiment extended_grid
+
+# Parametric p_out sweep for I(α,β) surface:
+python scripts/run_sweep.py --experiment pout_sweep
+
+# Robustness checks (CIFAR-10, EMNIST, ConvNet, quantity skew, WS):
+python scripts/run_sweep.py --experiment robustness_check
+
+# ============================================================
+# Post-Experiment Analysis
+# ============================================================
+
+# Factorial ANOVA + interaction test:
+python scripts/run_analysis.py --results_dir outputs/core_factorial
+
+# Interaction surface from p_out sweep:
+python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surface
+
+# Both analyses:
+python scripts/run_analysis.py --results_dir outputs/extended_grid --analysis both
+
+# Generate all figures:
+python scripts/run_visualization.py --results_dir outputs/core_factorial
+
+# ============================================================
+# GPU Notes
+# ============================================================
+# - Each run uses one GPU. For multi-GPU parallelism, run multiple
+#   sweeps simultaneously on different GPUs by setting CUDA_VISIBLE_DEVICES:
+#
+#   CUDA_VISIBLE_DEVICES=0 python scripts/run_sweep.py --experiment core_factorial &
+#   CUDA_VISIBLE_DEVICES=1 python scripts/run_sweep.py --experiment extended_grid &
+#
+# - Memory requirement: ~4-6 GB per run with 128 clients and ResNet-18.
+#   ConvNet runs use ~2 GB.
+#
+# - Expected runtime per single run (300 rounds, 128 clients, ResNet-18):
+#   ~2-4 hours on a modern GPU (V100/A100).
+#
+# - Full core_factorial sweep (60 runs): ~5-10 days on a single GPU,
+#   or ~1-2 days with 4 GPUs in parallel.
+# ============================================================
+
+# ============================================================
+# Troubleshooting
+# ============================================================
+# Q: "CUDA out of memory" error
+# A: Reduce batch_size in configs/training/default.yaml (try 32 or 16).
+#    Or set model.keep_on_device=false to move models to CPU between rounds.
+#
+# Q: "No module named 'superadditivity'" error
+# A: Make sure you ran `pip install -e .` and the venv is activated.
+#
+# Q: Tests fail with import errors
+# A: Run `pip install -e ".[dev]"` to install test dependencies.
+#
+# Q: h5py/numpy compatibility error
+# A: Apply the version fixes in step 5 above.
+# ============================================================

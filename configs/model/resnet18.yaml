@@ -1,0 +1,3 @@
+architecture: resnet18_cifar
+n_classes: ${data.n_classes}
+keep_on_device: true

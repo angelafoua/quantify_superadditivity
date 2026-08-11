@@ -1,0 +1,25 @@
+# Extended 4×4 factorial:
+#   4 data levels: IID, mild (α=10), moderate (α=0.5), severe (α=0.1)
+#   4 network levels: ER, SBM weak (p_out=0.1), SBM medium (p_out=0.02), SBM strong (p_out=0.005)
+#
+# 16 cells × 5 run_seeds × 3 graph_seeds = 240 runs.
+
+experiment_name: extended_grid
+
+data_levels:
+  - iid
+  - mild_noniid
+  - moderate_noniid
+  - severe_noniid
+
+network_levels:
+  - erdos_renyi
+  - sbm_weak
+  - sbm_medium
+  - sbm_strong
+
+run_seeds: [42, 123, 456, 789, 2024]
+graph_seeds: [100, 200, 300]
+
+model: resnet18
+training: default

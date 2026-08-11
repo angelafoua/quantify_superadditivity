@@ -1,0 +1,6 @@
+topology: sbm
+n_nodes: 128
+n_communities: ${n_communities}
+p_in: 0.3
+p_out: 0.005
+seed: ${graph_seed}

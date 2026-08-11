@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data and outputs
+data/
+outputs/
+outputs_*/
+figures/
+reports/
+checkpoints/
+
+# Experiment artifacts
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.npz
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# W&B
+wandb/
+
+# Coverage
+.coverage
+htmlcov/
