@@ -1,0 +1,5 @@
+dataset: cifar100
+data_dir: data/cifar100
+download: true
+partition_method: quantity_skew
+dirichlet_alpha: 1.0
