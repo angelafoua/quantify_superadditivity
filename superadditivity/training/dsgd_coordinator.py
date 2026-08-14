@@ -120,8 +120,8 @@ class DSGDCoordinator:
                 round_num % self.eval_every == 0
                 or round_num == self.total_rounds - 1
             ):
-                models = [c.model for c in self.clients]
-                self.evaluator.evaluate(models, round_num)
+                clients_dict = {i: c for i, c in enumerate(self.clients)}
+                self.evaluator.evaluate(clients_dict, round_num)
 
             if self.checkpoint_manager and (
                 round_num % self.checkpoint_every == 0
