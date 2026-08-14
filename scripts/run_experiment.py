@@ -298,6 +298,7 @@ def run(cfg: DictConfig) -> dict:
 
     history = coordinator.run()
     csv_logger.close()
+    drift_tracker.save()
 
     summary = {
         "experiment_name": cfg.experiment_name,
