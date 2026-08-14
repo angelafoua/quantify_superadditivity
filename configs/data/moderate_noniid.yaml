@@ -3,3 +3,4 @@ data_dir: data/cifar100
 download: true
 partition_method: dirichlet_semantic
 dirichlet_alpha: 0.5
+n_classes: 100

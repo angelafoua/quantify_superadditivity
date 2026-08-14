@@ -3,3 +3,4 @@ data_dir: data/cifar100
 download: true
 partition_method: quantity_skew
 dirichlet_alpha: 1.0
+n_classes: 100
