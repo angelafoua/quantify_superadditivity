@@ -1,5 +1,5 @@
 algorithm: dsgd
-total_rounds: 300
+total_rounds: 500
 local_steps: 1
 batch_size: 64
 
