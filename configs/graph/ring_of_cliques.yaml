@@ -1,4 +1,4 @@
 topology: ring_of_cliques
-n_nodes: 128
-n_cliques: ${n_communities}
+n_clients: ${n_clients}
+n_communities: ${n_communities}
 seed: ${graph_seed}
