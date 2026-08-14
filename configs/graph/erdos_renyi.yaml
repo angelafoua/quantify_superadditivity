@@ -1,4 +1,5 @@
 topology: erdos_renyi
-n_nodes: 128
+n_clients: ${n_clients}
+n_communities: ${n_communities}
 edge_probability: null  # auto-matched to SBM expected density
 seed: ${graph_seed}

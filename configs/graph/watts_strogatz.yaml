@@ -1,5 +1,6 @@
 topology: watts_strogatz
-n_nodes: 128
+n_clients: ${n_clients}
+n_communities: ${n_communities}
 k_neighbors: 8
 rewire_prob: 0.1
 seed: ${graph_seed}
