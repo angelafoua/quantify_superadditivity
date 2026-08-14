@@ -33,7 +33,13 @@ class DriftTracker:
     >>> tracker.save("results/metrics.h5")
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        output_path: Optional[str] = None,
+        layer_names: Optional[List[str]] = None,
+    ) -> None:
+        self._output_path = output_path
+        self._layer_names = layer_names
         self._metrics: Dict[str, List[Any]] = {}
         self._rounds: Dict[str, List[int]] = {}
         self._embeddings: Dict[int, Dict[str, Any]] = {}
@@ -169,14 +175,21 @@ class DriftTracker:
             len(self._embeddings),
         )
 
-    def save(self, path: str) -> None:
+    def save(self, path: Optional[str] = None) -> None:
         """Persist all tracked metrics and embeddings to an HDF5 file.
 
         Parameters
         ----------
         path:
-            File path for the output HDF5 file.
+            File path for the output HDF5 file. Falls back to ``output_path``
+            supplied at construction time if not given.
         """
+        resolved = path or self._output_path
+        if resolved is None:
+            raise ValueError(
+                "No path provided and no output_path set at construction time."
+            )
+        path = resolved
         logger.info("Saving drift tracker to %s", path)
 
         # Save scalar / array metrics
