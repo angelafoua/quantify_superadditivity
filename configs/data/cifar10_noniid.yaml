@@ -1,0 +1,5 @@
+dataset: cifar10
+data_dir: data/cifar10
+download: true
+partition_method: dirichlet_semantic
+dirichlet_alpha: 0.5

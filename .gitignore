@@ -21,6 +21,8 @@ env/
 
 # Data and outputs
 data/
+!configs/data/
+!configs/data/*.yaml
 outputs/
 outputs_*/
 figures/
