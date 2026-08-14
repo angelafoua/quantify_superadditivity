@@ -3,3 +3,4 @@ data_dir: data/cifar10
 download: true
 partition_method: iid
 dirichlet_alpha: null
+n_classes: 10

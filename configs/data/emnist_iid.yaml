@@ -3,3 +3,4 @@ data_dir: data/emnist
 download: true
 partition_method: iid
 dirichlet_alpha: null
+n_classes: 62
