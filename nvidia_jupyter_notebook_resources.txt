@@ -1,0 +1,3 @@
+Jupyter path: /home/nvidia/Lou Workspace
+Actual storage: /lp-dev/users/nvidia/Lou Workspace
+Available space: approximately 6.1 TiB
