@@ -1,0 +1,6 @@
+dataset: domainnet
+data_dir: data/domainnet
+download: true
+partition_method: iid
+dirichlet_alpha: null
+n_classes: 345

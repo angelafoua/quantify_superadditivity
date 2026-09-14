@@ -1,0 +1,6 @@
+dataset: pathmnist
+data_dir: data/pathmnist
+download: true
+partition_method: iid
+dirichlet_alpha: null
+n_classes: 9

@@ -8,7 +8,7 @@ defaults:
 experiment_name: superadditivity_experiment
 output_dir: outputs/${experiment_name}
 
-n_clients: 128
+n_clients: 32
 n_communities: 4
 
 run_seed: 42

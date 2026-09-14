@@ -22,7 +22,7 @@ and Drift is measured via layer-wise CKA on a fixed probe set.
 ## Mental model of the pipeline
 
 ```
-config (Hydra) → graph (SBM/ER/WS) → partition (Dirichlet/IID/Quantity) → 128 clients
+config (Hydra) → graph (SBM/ER/WS) → partition (Dirichlet/IID/Quantity) → N clients
    → D-SGD rounds {local SGD → gossip mix → drift eval} → HDF5 results
    → statistical analysis (ANOVA + bootstrap I>0 test) → figures
 ```
@@ -40,7 +40,7 @@ else is library code under `superadditivity/`.
 | Quantity-skew partitioning | `superadditivity/datasets/quantity_skew_partitioner.py` |
 | Per-client dataset | `superadditivity/datasets/client_dataset.py` |
 | Graphs + mixing matrix | `superadditivity/graphs/` |
-| Models (ResNet-18, ConvNet) | `superadditivity/models/` |
+| Models (ResNet-18, ConvNet, WideResNet, ViT-Tiny) | `superadditivity/models/` |
 | Training loop (D-SGD) | `superadditivity/training/dsgd_coordinator.py` |
 | Gossip mixing (critical!) | `superadditivity/communication/gossip_mixer.py` |
 | Drift metrics (CKA, RSA, MMD, Fisher, Centroid) | `superadditivity/evaluation/` |
@@ -52,14 +52,21 @@ else is library code under `superadditivity/`.
 
 ## Supported datasets
 
-- **CIFAR-100** (primary) — 100 fine classes, 20 superclasses, 4 semantic clusters
-- **CIFAR-10** — 10 classes, simpler task for robustness check
-- **Federated EMNIST** — 62 classes (digits + letters), grayscale, different domain
+- **CIFAR-100** (primary) — 100 classes, 32×32 RGB, 4 semantic clusters
+- **CIFAR-10** — 10 classes, 32×32 RGB, 2 semantic clusters
+- **Federated EMNIST** — 62 classes, 32×32 grayscale, 3 semantic clusters
+- **DomainNet** (clipart) — 345 classes, 64×64 RGB, 4 semantic clusters
+- **iNaturalist** (200-class subset) — 200 classes, 64×64 RGB, 4 semantic clusters
+- **PathMNIST** — 9 classes, 32×32 RGB, 3 semantic clusters
+- **Google Speech Commands** — 35 classes, 64×64 mel-spectrogram (1ch), 4 semantic clusters
 
 ## Supported models
 
-- **ResNet-18** (CIFAR variant) — 3×3 stride-1 stem, layers 1-4 (64/128/256/512), feature_dim=512
-- **SimpleConvNet** (4-layer) — lighter architecture for robustness check
+- **ResNet-18** (CIFAR variant) — 3×3 stride-1 stem, layers 1-4, feature_dim=512
+- **ResNet-34** (CIFAR variant) — deeper ResNet, same interface
+- **SimpleConvNet** (4-layer) — lighter architecture for robustness check, feature_dim=256
+- **WideResNet-28-2** — wider residual blocks, 3 stages, feature_dim=128
+- **ViT-Tiny** — Vision Transformer (dim=192, depth=12, heads=3), feature_dim=192
 
 ## Supported topologies
 
@@ -83,7 +90,8 @@ else is library code under `superadditivity/`.
    the single most failure-prone step. Tested in `tests/test_gossip_mixer.py`.
 3. **The probe set is identical across every run** (fixed seed `999`). Never make
    the probe seed depend on `run_seed`/`graph_seed`.
-4. **All 128 clients start from the same initialisation** (seeded by `run_seed`).
+4. **All N clients start from the same initialisation** (seeded by `run_seed`).
+   N must be a multiple of `n_communities` (validated at startup).
 5. **All drift metrics are computed in float64** for numerical stability.
 6. **This codebase is independent** — no imports from `dfl_drift` or any other project.
 

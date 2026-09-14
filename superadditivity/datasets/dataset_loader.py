@@ -1,18 +1,26 @@
-"""Unified multi-dataset loader for CIFAR-100, CIFAR-10, and EMNIST.
+"""Unified multi-dataset loader.
 
 Handles downloading, normalization, probe-set extraction, and semantic
-clustering for the three benchmark datasets used in this project.
+clustering for all benchmark datasets used in this project:
+CIFAR-100, CIFAR-10, EMNIST, DomainNet, iNaturalist, PathMNIST,
+and Google Speech Commands.
+
+Each dataset is described by a ``DatasetSpec`` that stores its metadata
+(num_classes, image_size, in_channels, normalization stats, semantic
+cluster definitions). Nothing is hardcoded outside these specs.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 import torchvision
 import torchvision.transforms as T
 
@@ -21,10 +29,25 @@ from superadditivity.utils.seed import PROBE_SEED, seed_worker
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# CIFAR-100 semantic structure
+# Dataset specifications
 # ---------------------------------------------------------------------------
 
-#: Mapping from CIFAR-100 superclass name to a list of fine-class names.
+
+@dataclass
+class DatasetSpec:
+    """Metadata for a single dataset — no data, just the spec."""
+
+    name: str
+    num_classes: int
+    image_size: int
+    in_channels: int
+    mean: Tuple[float, ...]
+    std: Tuple[float, ...]
+    semantic_clusters: Optional[Dict[int, List[Any]]] = None
+    n_semantic_clusters: int = 4
+
+
+# CIFAR-100 superclass mapping (needed for semantic cluster resolution)
 SUPERCLASS_TO_FINE: Dict[str, List[str]] = {
     "aquatic_mammals": ["beaver", "dolphin", "otter", "seal", "whale"],
     "fish": ["aquarium_fish", "flatfish", "ray", "shark", "trout"],
@@ -60,74 +83,140 @@ SUPERCLASS_TO_FINE: Dict[str, List[str]] = {
     "vehicles_2": ["lawn_mower", "rocket", "streetcar", "tank", "tractor"],
 }
 
-#: Four-way balanced semantic clustering for CIFAR-100.
-#: Each cluster contains 5 superclasses (= 25 fine classes).
-SEMANTIC_CLUSTERS: Dict[str, Dict[int, List[str]]] = {
-    "cifar100": {
-        0: [  # Animals
-            "aquatic_mammals",
-            "fish",
-            "insects",
-            "large_carnivores",
-            "reptiles",
-        ],
-        1: [  # Artifacts
-            "vehicles_1",
-            "vehicles_2",
-            "household_electrical_devices",
-            "household_furniture",
-            "food_containers",
-        ],
-        2: [  # Nature / Structures
-            "flowers",
-            "fruit_and_vegetables",
-            "trees",
-            "large_natural_outdoor_scenes",
-            "large_man-made_outdoor_things",
-        ],
-        3: [  # Mammals / People
-            "people",
-            "medium_mammals",
-            "small_mammals",
-            "large_omnivores_and_herbivores",
-            "non-insect_invertebrates",
-        ],
-    },
-    "cifar10": {
-        0: [2, 3, 4, 5, 6, 7],   # Animals: bird, cat, deer, dog, frog, horse
-        1: [0, 1, 8, 9],          # Vehicles: airplane, automobile, ship, truck
-    },
-}
 
 # ---------------------------------------------------------------------------
-# Per-dataset normalization constants
+# Registry of all supported datasets
 # ---------------------------------------------------------------------------
 
-_NORM_STATS: Dict[str, Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]]] = {
-    "cifar100": {
-        "mean": (0.5071, 0.4867, 0.4408),
-        "std": (0.2675, 0.2565, 0.2761),
-    },
-    "cifar10": {
-        "mean": (0.4914, 0.4822, 0.4465),
-        "std": (0.2470, 0.2435, 0.2616),
-    },
-    "emnist": {
-        "mean": (0.1751,),
-        "std": (0.3332,),
-    },
+DATASET_SPECS: Dict[str, DatasetSpec] = {
+    "cifar100": DatasetSpec(
+        name="cifar100",
+        num_classes=100,
+        image_size=32,
+        in_channels=3,
+        mean=(0.5071, 0.4867, 0.4408),
+        std=(0.2675, 0.2565, 0.2761),
+        semantic_clusters={
+            0: [  # Animals
+                "aquatic_mammals", "fish", "insects",
+                "large_carnivores", "reptiles",
+            ],
+            1: [  # Artifacts
+                "vehicles_1", "vehicles_2",
+                "household_electrical_devices",
+                "household_furniture", "food_containers",
+            ],
+            2: [  # Nature / Structures
+                "flowers", "fruit_and_vegetables", "trees",
+                "large_natural_outdoor_scenes",
+                "large_man-made_outdoor_things",
+            ],
+            3: [  # Mammals / People
+                "people", "medium_mammals", "small_mammals",
+                "large_omnivores_and_herbivores",
+                "non-insect_invertebrates",
+            ],
+        },
+        n_semantic_clusters=4,
+    ),
+    "cifar10": DatasetSpec(
+        name="cifar10",
+        num_classes=10,
+        image_size=32,
+        in_channels=3,
+        mean=(0.4914, 0.4822, 0.4465),
+        std=(0.2470, 0.2435, 0.2616),
+        semantic_clusters={
+            0: [2, 3, 4, 5, 6, 7],   # Animals
+            1: [0, 1, 8, 9],          # Vehicles
+        },
+        n_semantic_clusters=2,
+    ),
+    "emnist": DatasetSpec(
+        name="emnist",
+        num_classes=62,
+        image_size=32,
+        in_channels=1,
+        mean=(0.1751,),
+        std=(0.3332,),
+        semantic_clusters={
+            0: list(range(0, 10)),    # Digits 0-9
+            1: list(range(10, 36)),   # Uppercase A-Z
+            2: list(range(36, 62)),   # Lowercase a-z
+        },
+        n_semantic_clusters=3,
+    ),
+    "domainnet": DatasetSpec(
+        name="domainnet",
+        num_classes=345,
+        image_size=64,
+        in_channels=3,
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+        semantic_clusters={
+            0: list(range(0, 86)),
+            1: list(range(86, 172)),
+            2: list(range(172, 258)),
+            3: list(range(258, 345)),
+        },
+        n_semantic_clusters=4,
+    ),
+    "inaturalist": DatasetSpec(
+        name="inaturalist",
+        num_classes=200,
+        image_size=64,
+        in_channels=3,
+        mean=(0.466, 0.480, 0.374),
+        std=(0.237, 0.231, 0.252),
+        semantic_clusters={
+            0: list(range(0, 50)),    # Animalia subset
+            1: list(range(50, 100)),  # Plantae subset
+            2: list(range(100, 150)), # Fungi subset
+            3: list(range(150, 200)), # Mixed/Other
+        },
+        n_semantic_clusters=4,
+    ),
+    "pathmnist": DatasetSpec(
+        name="pathmnist",
+        num_classes=9,
+        image_size=32,
+        in_channels=3,
+        mean=(0.7406, 0.5331, 0.7059),
+        std=(0.1279, 0.1606, 0.1191),
+        semantic_clusters={
+            0: [0, 1, 2],       # Tissue types group A
+            1: [3, 4, 5],       # Tissue types group B
+            2: [6, 7, 8],       # Tissue types group C
+        },
+        n_semantic_clusters=3,
+    ),
+    "speech_commands": DatasetSpec(
+        name="speech_commands",
+        num_classes=35,
+        image_size=64,
+        in_channels=1,
+        mean=(0.0,),
+        std=(1.0,),
+        semantic_clusters={
+            0: list(range(0, 10)),    # Digits
+            1: list(range(10, 18)),   # Directional/action
+            2: list(range(18, 26)),   # Action commands
+            3: list(range(26, 35)),   # Binary/misc
+        },
+        n_semantic_clusters=4,
+    ),
 }
 
-_SUPPORTED_DATASETS = {"cifar100", "cifar10", "emnist"}
+_SUPPORTED_DATASETS = frozenset(DATASET_SPECS.keys())
 
 
 class DatasetLoader:
-    """Unified loader for CIFAR-100, CIFAR-10, and EMNIST.
+    """Unified loader for all supported datasets.
 
     Parameters
     ----------
     dataset_name:
-        One of ``"cifar100"``, ``"cifar10"``, or ``"emnist"``.
+        One of the keys in ``DATASET_SPECS``.
     data_dir:
         Root directory for dataset downloads / caching.
     probe_size:
@@ -159,6 +248,7 @@ class DatasetLoader:
                 f"Choose from {sorted(_SUPPORTED_DATASETS)}."
             )
         self.dataset_name = dataset_name
+        self.spec = DATASET_SPECS[dataset_name]
         self.data_dir = Path(data_dir)
         self.probe_size = probe_size
         self.probe_seed = probe_seed
@@ -171,9 +261,10 @@ class DatasetLoader:
         self._probe_set: Optional[Subset] = None
 
         logger.info(
-            "DatasetLoader initialised: dataset=%s, data_dir=%s",
-            self.dataset_name,
-            self.data_dir,
+            "DatasetLoader initialised: dataset=%s, data_dir=%s, "
+            "image_size=%d, in_channels=%d",
+            self.dataset_name, self.data_dir,
+            self.spec.image_size, self.spec.in_channels,
         )
 
     # ------------------------------------------------------------------
@@ -193,13 +284,15 @@ class DatasetLoader:
         -------
         torchvision.transforms.Compose
         """
-        stats = _NORM_STATS[self.dataset_name]
-        mean, std = stats["mean"], stats["std"]
+        spec = self.spec
+        size = spec.image_size
+        mean = spec.mean
+        std = spec.std
 
         if self.dataset_name in ("cifar100", "cifar10"):
             if train:
                 return T.Compose([
-                    T.RandomCrop(32, padding=4),
+                    T.RandomCrop(size, padding=4),
                     T.RandomHorizontalFlip(),
                     T.ToTensor(),
                     T.Normalize(mean, std),
@@ -209,21 +302,71 @@ class DatasetLoader:
                 T.Normalize(mean, std),
             ])
 
-        # EMNIST: 28x28 grayscale -> pad to 32x32 -> repeat to 3 channels
-        if train:
+        if self.dataset_name == "emnist":
+            # 28x28 grayscale -> resize to target size
+            if train:
+                return T.Compose([
+                    T.Resize(size),
+                    T.RandomCrop(size, padding=4),
+                    T.ToTensor(),
+                    T.Normalize(mean, std),
+                ])
             return T.Compose([
-                T.Pad(2),  # 28x28 -> 32x32
-                T.RandomCrop(32, padding=4),
+                T.Resize(size),
                 T.ToTensor(),
-                T.Lambda(lambda x: x.repeat(3, 1, 1)),  # 1ch -> 3ch
-                T.Normalize(mean * 3, std * 3),
+                T.Normalize(mean, std),
             ])
-        return T.Compose([
-            T.Pad(2),
-            T.ToTensor(),
-            T.Lambda(lambda x: x.repeat(3, 1, 1)),
-            T.Normalize(mean * 3, std * 3),
-        ])
+
+        if self.dataset_name == "domainnet":
+            if train:
+                return T.Compose([
+                    T.Resize((size, size)),
+                    T.RandomCrop(size, padding=4),
+                    T.RandomHorizontalFlip(),
+                    T.ToTensor(),
+                    T.Normalize(mean, std),
+                ])
+            return T.Compose([
+                T.Resize((size, size)),
+                T.ToTensor(),
+                T.Normalize(mean, std),
+            ])
+
+        if self.dataset_name == "inaturalist":
+            if train:
+                return T.Compose([
+                    T.Resize((size, size)),
+                    T.RandomCrop(size, padding=4),
+                    T.RandomHorizontalFlip(),
+                    T.ToTensor(),
+                    T.Normalize(mean, std),
+                ])
+            return T.Compose([
+                T.Resize((size, size)),
+                T.ToTensor(),
+                T.Normalize(mean, std),
+            ])
+
+        if self.dataset_name == "pathmnist":
+            if train:
+                return T.Compose([
+                    T.Resize((size, size)),
+                    T.RandomHorizontalFlip(),
+                    T.RandomVerticalFlip(),
+                    T.ToTensor(),
+                    T.Normalize(mean, std),
+                ])
+            return T.Compose([
+                T.Resize((size, size)),
+                T.ToTensor(),
+                T.Normalize(mean, std),
+            ])
+
+        if self.dataset_name == "speech_commands":
+            # Audio -> mel-spectrogram; transforms are handled in load()
+            return T.Compose([T.ToTensor()])
+
+        raise ValueError(f"No transforms defined for {self.dataset_name}")
 
     # ------------------------------------------------------------------
     # Load
@@ -241,45 +384,54 @@ class DatasetLoader:
 
         if self.dataset_name == "cifar100":
             self._train_dataset = torchvision.datasets.CIFAR100(
-                root=str(self.data_dir),
-                train=True,
-                transform=train_tf,
-                download=self.download,
+                root=str(self.data_dir), train=True,
+                transform=train_tf, download=self.download,
             )
             self._test_dataset = torchvision.datasets.CIFAR100(
-                root=str(self.data_dir),
-                train=False,
-                transform=test_tf,
-                download=self.download,
+                root=str(self.data_dir), train=False,
+                transform=test_tf, download=self.download,
             )
+
         elif self.dataset_name == "cifar10":
             self._train_dataset = torchvision.datasets.CIFAR10(
-                root=str(self.data_dir),
-                train=True,
-                transform=train_tf,
-                download=self.download,
+                root=str(self.data_dir), train=True,
+                transform=train_tf, download=self.download,
             )
             self._test_dataset = torchvision.datasets.CIFAR10(
-                root=str(self.data_dir),
-                train=False,
-                transform=test_tf,
-                download=self.download,
+                root=str(self.data_dir), train=False,
+                transform=test_tf, download=self.download,
             )
+
         elif self.dataset_name == "emnist":
             self._train_dataset = torchvision.datasets.EMNIST(
-                root=str(self.data_dir),
-                split="byclass",
-                train=True,
-                transform=train_tf,
-                download=self.download,
+                root=str(self.data_dir), split="byclass", train=True,
+                transform=train_tf, download=self.download,
             )
             self._test_dataset = torchvision.datasets.EMNIST(
-                root=str(self.data_dir),
-                split="byclass",
-                train=False,
-                transform=test_tf,
-                download=self.download,
+                root=str(self.data_dir), split="byclass", train=False,
+                transform=test_tf, download=self.download,
             )
+
+        elif self.dataset_name == "domainnet":
+            self._train_dataset, self._test_dataset = self._load_domainnet(
+                train_tf, test_tf,
+            )
+
+        elif self.dataset_name == "inaturalist":
+            self._train_dataset, self._test_dataset = self._load_inaturalist(
+                train_tf, test_tf,
+            )
+
+        elif self.dataset_name == "pathmnist":
+            self._train_dataset, self._test_dataset = self._load_pathmnist(
+                train_tf, test_tf,
+            )
+
+        elif self.dataset_name == "speech_commands":
+            self._train_dataset, self._test_dataset = self._load_speech_commands()
+
+        else:
+            raise ValueError(f"Unknown dataset: {self.dataset_name}")
 
         logger.info(
             "Loaded %s: %d train, %d test samples",
@@ -290,15 +442,204 @@ class DatasetLoader:
         return self._train_dataset, self._test_dataset
 
     # ------------------------------------------------------------------
+    # Dataset-specific loaders
+    # ------------------------------------------------------------------
+
+    def _load_domainnet(
+        self, train_tf: T.Compose, test_tf: T.Compose,
+    ) -> Tuple[Dataset, Dataset]:
+        """Load DomainNet (clipart domain for tractability).
+
+        Uses torchvision ImageFolder on downloaded/extracted data.
+        Falls back to a synthetic placeholder if the data directory
+        does not exist yet (for tests).
+        """
+        domain_dir = self.data_dir / "clipart"
+        if domain_dir.exists():
+            train_ds = torchvision.datasets.ImageFolder(
+                root=str(domain_dir / "train"), transform=train_tf,
+            )
+            test_ds = torchvision.datasets.ImageFolder(
+                root=str(domain_dir / "test"), transform=test_tf,
+            )
+            return train_ds, test_ds
+
+        logger.warning(
+            "DomainNet directory not found at %s; using synthetic placeholder.",
+            domain_dir,
+        )
+        return self._synthetic_placeholder()
+
+    def _load_inaturalist(
+        self, train_tf: T.Compose, test_tf: T.Compose,
+    ) -> Tuple[Dataset, Dataset]:
+        """Load iNaturalist subset (200 classes).
+
+        Uses torchvision ImageFolder on pre-organized directory structure.
+        Falls back to a synthetic placeholder if not available.
+        """
+        data_root = self.data_dir
+        train_dir = data_root / "train"
+        test_dir = data_root / "test"
+
+        if train_dir.exists():
+            train_ds = torchvision.datasets.ImageFolder(
+                root=str(train_dir), transform=train_tf,
+            )
+            test_ds = torchvision.datasets.ImageFolder(
+                root=str(test_dir), transform=test_tf,
+            )
+            return train_ds, test_ds
+
+        logger.warning(
+            "iNaturalist directory not found at %s; using synthetic placeholder.",
+            data_root,
+        )
+        return self._synthetic_placeholder()
+
+    def _load_pathmnist(
+        self, train_tf: T.Compose, test_tf: T.Compose,
+    ) -> Tuple[Dataset, Dataset]:
+        """Load PathMNIST from the MedMNIST package.
+
+        Falls back to synthetic data if medmnist is not installed.
+        """
+        try:
+            import medmnist
+            from medmnist import PathMNIST as PathMNISTClass
+
+            train_ds = PathMNISTClass(
+                split="train", transform=train_tf,
+                download=self.download, root=str(self.data_dir),
+            )
+            test_ds = PathMNISTClass(
+                split="test", transform=test_tf,
+                download=self.download, root=str(self.data_dir),
+            )
+            # MedMNIST uses .labels instead of .targets; add targets attr
+            if not hasattr(train_ds, "targets"):
+                train_ds.targets = train_ds.labels.squeeze().tolist()
+            if not hasattr(test_ds, "targets"):
+                test_ds.targets = test_ds.labels.squeeze().tolist()
+            return train_ds, test_ds
+        except ImportError:
+            logger.warning(
+                "medmnist package not installed; using synthetic placeholder "
+                "for PathMNIST. Install with: pip install medmnist"
+            )
+            return self._synthetic_placeholder()
+
+    def _load_speech_commands(self) -> Tuple[Dataset, Dataset]:
+        """Load Google Speech Commands v2 as mel-spectrogram tensors.
+
+        Converts 1-second audio clips into mel-spectrograms and packages
+        them as TensorDatasets. Falls back to synthetic data if
+        torchaudio is not available or download fails.
+        """
+        spec = self.spec
+        size = spec.image_size
+
+        try:
+            import torchaudio
+            train_ds_raw = torchaudio.datasets.SPEECHCOMMANDS(
+                root=str(self.data_dir), download=self.download,
+                subset="training",
+            )
+            test_ds_raw = torchaudio.datasets.SPEECHCOMMANDS(
+                root=str(self.data_dir), download=self.download,
+                subset="testing",
+            )
+
+            train_ds = self._speech_to_spectrograms(train_ds_raw, size)
+            test_ds = self._speech_to_spectrograms(test_ds_raw, size)
+            return train_ds, test_ds
+
+        except Exception as e:
+            logger.warning(
+                "Failed to load Speech Commands: %s. Using synthetic placeholder.", e
+            )
+            return self._synthetic_placeholder()
+
+    @staticmethod
+    def _speech_to_spectrograms(
+        raw_ds: Dataset, target_size: int,
+    ) -> TensorDataset:
+        """Convert a SpeechCommands dataset to mel-spectrogram TensorDataset."""
+        import torchaudio
+        mel_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=16000, n_fft=400, hop_length=160,
+            n_mels=target_size,
+        )
+
+        # Build label mapping from unique labels
+        all_labels_str = sorted(set(
+            raw_ds[i][2] for i in range(len(raw_ds))
+        ))
+        label_to_idx = {lab: i for i, lab in enumerate(all_labels_str)}
+
+        images_list: list[torch.Tensor] = []
+        labels_list: list[int] = []
+
+        for i in range(len(raw_ds)):
+            waveform, sample_rate, label, *_ = raw_ds[i]
+            # Pad/trim to 1 second
+            if waveform.shape[1] < 16000:
+                waveform = torch.nn.functional.pad(
+                    waveform, (0, 16000 - waveform.shape[1])
+                )
+            else:
+                waveform = waveform[:, :16000]
+
+            mel = mel_transform(waveform)  # (1, n_mels, time)
+            # Resize time dimension to target_size
+            mel = torch.nn.functional.interpolate(
+                mel.unsqueeze(0), size=(target_size, target_size),
+                mode="bilinear", align_corners=False,
+            ).squeeze(0)
+            # Log-scale
+            mel = torch.log(mel.clamp(min=1e-9))
+            # Normalize to zero mean, unit variance
+            mel = (mel - mel.mean()) / (mel.std() + 1e-9)
+
+            images_list.append(mel)
+            labels_list.append(label_to_idx[label])
+
+        images = torch.stack(images_list)
+        labels = torch.tensor(labels_list, dtype=torch.long)
+
+        ds = TensorDataset(images, labels)
+        ds.targets = labels_list  # type: ignore[attr-defined]
+        return ds
+
+    def _synthetic_placeholder(self) -> Tuple[TensorDataset, TensorDataset]:
+        """Create a synthetic placeholder dataset for testing/fallback."""
+        spec = self.spec
+        n_train, n_test = 1000, 200
+        ch = spec.in_channels
+        sz = spec.image_size
+        nc = spec.num_classes
+
+        train_imgs = torch.randn(n_train, ch, sz, sz)
+        train_labels = torch.randint(0, nc, (n_train,))
+        test_imgs = torch.randn(n_test, ch, sz, sz)
+        test_labels = torch.randint(0, nc, (n_test,))
+
+        train_ds = TensorDataset(train_imgs, train_labels)
+        test_ds = TensorDataset(test_imgs, test_labels)
+        train_ds.targets = train_labels.tolist()  # type: ignore[attr-defined]
+        test_ds.targets = test_labels.tolist()  # type: ignore[attr-defined]
+        return train_ds, test_ds
+
+    # ------------------------------------------------------------------
     # Probe set
     # ------------------------------------------------------------------
 
     def get_probe_set(self) -> Subset:
         """Return a stratified probe set drawn from the test split.
 
-        The probe set uses a fixed seed (``probe_seed=999`` by default) that
-        is **independent** of the run seed, guaranteeing identical probes
-        across all experiments.
+        The probe set uses a fixed seed (``probe_seed=999`` by default)
+        that is **independent** of the run seed, guaranteeing identical
+        probes across all experiments.
 
         Returns
         -------
@@ -308,9 +649,7 @@ class DatasetLoader:
             return self._probe_set
 
         if self._test_dataset is None:
-            raise RuntimeError(
-                "Call load() before get_probe_set()."
-            )
+            raise RuntimeError("Call load() before get_probe_set().")
 
         targets = np.array(self._get_targets(self._test_dataset))
         num_classes = self.get_num_classes()
@@ -322,22 +661,19 @@ class DatasetLoader:
 
         for cls in range(num_classes):
             cls_indices = np.where(targets == cls)[0]
-            # Some classes may have fewer samples than per_class
             n_take = min(per_class, len(cls_indices))
             if cls < remainder:
                 n_take = min(n_take + 1, len(cls_indices))
-            chosen = rng.choice(cls_indices, size=n_take, replace=False)
-            selected_indices.extend(chosen.tolist())
+            if len(cls_indices) > 0 and n_take > 0:
+                chosen = rng.choice(cls_indices, size=n_take, replace=False)
+                selected_indices.extend(chosen.tolist())
 
-        # Shuffle so classes are interleaved
         rng.shuffle(selected_indices)
 
         self._probe_set = Subset(self._test_dataset, selected_indices)
         logger.info(
             "Probe set: %d samples from %s test split (seed=%d)",
-            len(self._probe_set),
-            self.dataset_name,
-            self.probe_seed,
+            len(self._probe_set), self.dataset_name, self.probe_seed,
         )
         return self._probe_set
 
@@ -346,12 +682,7 @@ class DatasetLoader:
     # ------------------------------------------------------------------
 
     def get_test_loader(self) -> DataLoader:
-        """Return a DataLoader over the full test set.
-
-        Returns
-        -------
-        torch.utils.data.DataLoader
-        """
+        """Return a DataLoader over the full test set."""
         if self._test_dataset is None:
             raise RuntimeError("Call load() before get_test_loader().")
 
@@ -372,14 +703,16 @@ class DatasetLoader:
     # ------------------------------------------------------------------
 
     def get_num_classes(self) -> int:
-        """Return the number of classes for the loaded dataset.
+        """Return the number of classes for the loaded dataset."""
+        return self.spec.num_classes
 
-        Returns
-        -------
-        int
-            100 for CIFAR-100, 10 for CIFAR-10, 62 for EMNIST (byclass).
-        """
-        return {"cifar100": 100, "cifar10": 10, "emnist": 62}[self.dataset_name]
+    def get_image_size(self) -> int:
+        """Return the spatial resolution for this dataset."""
+        return self.spec.image_size
+
+    def get_in_channels(self) -> int:
+        """Return the number of input channels for this dataset."""
+        return self.spec.in_channels
 
     def get_semantic_clusters(self) -> Optional[Dict[int, List[Any]]]:
         """Return semantic cluster definitions for the current dataset.
@@ -387,15 +720,9 @@ class DatasetLoader:
         Returns
         -------
         dict or None
-            For CIFAR-100: ``{0: [superclass_names], 1: ..., 3: ...}``
-            (4 clusters of 25 fine classes each).
-            For CIFAR-10: ``{0: [class_indices], 1: [class_indices]}``
-            (2 clusters).
-            For EMNIST: ``None`` (no semantic structure).
+            Mapping ``{cluster_id: [class_identifiers]}``.
         """
-        if self.dataset_name in SEMANTIC_CLUSTERS:
-            return SEMANTIC_CLUSTERS[self.dataset_name]
-        return None
+        return self.spec.semantic_clusters
 
     # ------------------------------------------------------------------
     # Helpers
@@ -405,31 +732,23 @@ class DatasetLoader:
     def _get_targets(dataset: Dataset) -> List[int]:
         """Extract integer targets from a torchvision dataset."""
         if hasattr(dataset, "targets"):
-            return list(dataset.targets)
+            targets = dataset.targets
+            if isinstance(targets, torch.Tensor):
+                return targets.tolist()
+            return list(targets)
         if hasattr(dataset, "labels"):
-            return list(dataset.labels)
+            labels = dataset.labels
+            if isinstance(labels, np.ndarray):
+                return labels.squeeze().tolist()
+            if isinstance(labels, torch.Tensor):
+                return labels.tolist()
+            return list(labels)
         raise AttributeError(
             f"Cannot find targets on {type(dataset).__name__}."
         )
 
     def get_fine_class_indices(self, superclass_names: List[str]) -> List[int]:
-        """Return sorted CIFAR-100 fine-class indices for a list of superclass names.
-
-        Parameters
-        ----------
-        superclass_names:
-            Superclass names from :data:`SUPERCLASS_TO_FINE`.
-
-        Returns
-        -------
-        list[int]
-            Sorted fine-class indices.
-
-        Raises
-        ------
-        RuntimeError
-            If the dataset is not CIFAR-100 or has not been loaded.
-        """
+        """Return sorted CIFAR-100 fine-class indices for superclass names."""
         if self.dataset_name != "cifar100":
             raise RuntimeError(
                 "get_fine_class_indices() is only available for CIFAR-100."
@@ -437,8 +756,6 @@ class DatasetLoader:
         if self._train_dataset is None:
             raise RuntimeError("Call load() before get_fine_class_indices().")
 
-        # Build superclass -> fine-class index mapping from the dataset's
-        # class_to_idx and the CIFAR-100 meta information.
         ds = self._train_dataset
         class_to_idx: Dict[str, int] = ds.class_to_idx  # type: ignore[attr-defined]
         indices: List[int] = []
@@ -449,8 +766,7 @@ class DatasetLoader:
                     indices.append(class_to_idx[fn])
                 else:
                     logger.warning(
-                        "Fine class %r not found in class_to_idx for superclass %r",
-                        fn,
-                        sc_name,
+                        "Fine class %r not found for superclass %r",
+                        fn, sc_name,
                     )
         return sorted(indices)

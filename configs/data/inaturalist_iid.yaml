@@ -1,0 +1,6 @@
+dataset: inaturalist
+data_dir: data/inaturalist
+download: true
+partition_method: iid
+dirichlet_alpha: null
+n_classes: 200

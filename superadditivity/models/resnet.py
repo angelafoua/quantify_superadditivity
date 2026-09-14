@@ -97,12 +97,13 @@ class CIFARResNet(nn.Module):
         block: type[BasicBlock],
         num_blocks: List[int],
         num_classes: int = 100,
+        in_channels: int = 3,
     ) -> None:
         super().__init__()
         self.in_planes: int = 64
 
         # 3x3 stride-1 stem — no max-pool
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
 
         self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
@@ -164,35 +165,55 @@ class CIFARResNet(nn.Module):
         return ["layer1", "layer2", "layer3", "layer4", "fc"]
 
 
-def build_resnet18_cifar(num_classes: int = 100) -> CIFARResNet:
+def build_resnet18_cifar(
+    num_classes: int = 100, in_channels: int = 3,
+) -> CIFARResNet:
     """Construct a CIFAR-adapted ResNet-18.
 
     Parameters
     ----------
     num_classes:
         Number of output classes.
+    in_channels:
+        Number of input image channels.
 
     Returns
     -------
     CIFARResNet
         Uninitialized ResNet-18 model.
     """
-    logger.info("Building CIFAR ResNet-18 with %d classes", num_classes)
-    return CIFARResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
+    logger.info(
+        "Building CIFAR ResNet-18 with %d classes, %d input channels",
+        num_classes, in_channels,
+    )
+    return CIFARResNet(
+        BasicBlock, [2, 2, 2, 2],
+        num_classes=num_classes, in_channels=in_channels,
+    )
 
 
-def build_resnet34_cifar(num_classes: int = 100) -> CIFARResNet:
+def build_resnet34_cifar(
+    num_classes: int = 100, in_channels: int = 3,
+) -> CIFARResNet:
     """Construct a CIFAR-adapted ResNet-34.
 
     Parameters
     ----------
     num_classes:
         Number of output classes.
+    in_channels:
+        Number of input image channels.
 
     Returns
     -------
     CIFARResNet
         Uninitialized ResNet-34 model.
     """
-    logger.info("Building CIFAR ResNet-34 with %d classes", num_classes)
-    return CIFARResNet(BasicBlock, [3, 4, 6, 3], num_classes=num_classes)
+    logger.info(
+        "Building CIFAR ResNet-34 with %d classes, %d input channels",
+        num_classes, in_channels,
+    )
+    return CIFARResNet(
+        BasicBlock, [3, 4, 6, 3],
+        num_classes=num_classes, in_channels=in_channels,
+    )
