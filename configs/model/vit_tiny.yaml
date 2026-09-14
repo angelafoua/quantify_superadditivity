@@ -1,0 +1,4 @@
+architecture: vit_tiny
+n_classes: ${data.n_classes}
+keep_on_device: true
+patch_size: 4

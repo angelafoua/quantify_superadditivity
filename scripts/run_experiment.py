@@ -1,7 +1,7 @@
 """Run a single superadditivity experiment.
 
 This is the main entry point for the pipeline:
-  config -> graph -> partition -> 128 clients -> D-SGD -> drift eval -> save.
+  config -> graph -> partition -> N clients -> D-SGD -> drift eval -> save.
 
 Usage:
     python scripts/run_experiment.py data=moderate_noniid graph=sbm_medium
@@ -28,8 +28,13 @@ from superadditivity.datasets.semantic_partitioner import SemanticPartitioner
 from superadditivity.datasets.quantity_skew_partitioner import QuantitySkewPartitioner
 from superadditivity.datasets.client_dataset import ClientDataset
 from superadditivity.graphs.graph_manager import GraphManager
-from superadditivity.models.resnet import build_resnet18_cifar
-from superadditivity.models.convnet import SimpleConvNet
+from superadditivity.models import (
+    build_resnet18_cifar,
+    build_resnet34_cifar,
+    build_convnet,
+    build_wide_resnet,
+    build_vit_tiny,
+)
 from superadditivity.models.model_utils import init_weights, clone_model
 from superadditivity.training.decentralized_client import DecentralizedClient
 from superadditivity.training.dsgd_coordinator import DSGDCoordinator
@@ -54,16 +59,51 @@ from superadditivity.utils.io import ensure_dir, save_json
 logger = logging.getLogger(__name__)
 
 
-def build_model(cfg: DictConfig, n_classes: int) -> torch.nn.Module:
-    """Instantiate the model based on config."""
+MODEL_REGISTRY = {
+    "resnet18_cifar": build_resnet18_cifar,
+    "resnet34_cifar": build_resnet34_cifar,
+    "convnet4": build_convnet,
+    "wide_resnet": build_wide_resnet,
+    "vit_tiny": build_vit_tiny,
+}
+
+
+def build_model(
+    cfg: DictConfig,
+    n_classes: int,
+    in_channels: int,
+    image_size: int,
+) -> torch.nn.Module:
+    """Instantiate the model based on config, dataset channels, and resolution."""
     arch = cfg.model.architecture
-    if arch == "resnet18_cifar":
-        return build_resnet18_cifar(num_classes=n_classes)
+    if arch not in MODEL_REGISTRY:
+        raise ValueError(
+            f"Unknown architecture: {arch!r}. "
+            f"Choose from {sorted(MODEL_REGISTRY)}."
+        )
+
+    if arch in ("resnet18_cifar", "resnet34_cifar"):
+        return MODEL_REGISTRY[arch](
+            num_classes=n_classes, in_channels=in_channels,
+        )
     elif arch == "convnet4":
-        in_channels = 1 if cfg.data.dataset == "emnist" else 3
-        return SimpleConvNet(
-            in_channels=in_channels,
+        return MODEL_REGISTRY[arch](
+            num_classes=n_classes, in_channels=in_channels,
+        )
+    elif arch == "wide_resnet":
+        return MODEL_REGISTRY[arch](
             num_classes=n_classes,
+            in_channels=in_channels,
+            depth=cfg.model.get("depth", 28),
+            widen_factor=cfg.model.get("widen_factor", 2),
+            dropout=cfg.model.get("dropout", 0.0),
+        )
+    elif arch == "vit_tiny":
+        return MODEL_REGISTRY[arch](
+            num_classes=n_classes,
+            in_channels=in_channels,
+            image_size=image_size,
+            patch_size=cfg.model.get("patch_size", 4),
         )
     else:
         raise ValueError(f"Unknown architecture: {arch}")
@@ -114,6 +154,15 @@ def run(cfg: DictConfig) -> dict:
     logger.info("Config:\n%s", OmegaConf.to_yaml(cfg))
     logger.info("=" * 60)
 
+    # ---- Validate n_clients ----
+    n_clients = cfg.n_clients
+    n_communities = cfg.n_communities
+    if n_clients % n_communities != 0:
+        raise ValueError(
+            f"n_clients ({n_clients}) must be a multiple of "
+            f"n_communities ({n_communities})."
+        )
+
     set_all_seeds(run_seed)
     device = select_device()
 
@@ -126,6 +175,8 @@ def run(cfg: DictConfig) -> dict:
     )
     train_dataset, test_dataset = loader.load()
     n_classes = loader.get_num_classes()
+    in_channels = loader.get_in_channels()
+    image_size = loader.get_image_size()
 
     # ---- Graph ----
     logger.info("Building graph: %s", cfg.graph.topology)
@@ -168,11 +219,15 @@ def run(cfg: DictConfig) -> dict:
         )
 
     # ---- Model ----
-    logger.info("Initialising model: %s", cfg.model.architecture)
+    logger.info(
+        "Initialising model: %s (in_channels=%d, image_size=%d)",
+        cfg.model.architecture, in_channels, image_size,
+    )
     init_seed = derived_seed(run_seed, kind="weight_init")
     set_all_seeds(init_seed)
-    base_model = build_model(cfg, n_classes)
+    base_model = build_model(cfg, n_classes, in_channels, image_size)
     init_weights(base_model, seed=init_seed)
+    layer_names = base_model.get_layer_names()
 
     # ---- Clients ----
     logger.info("Creating %d clients...", cfg.n_clients)
@@ -221,7 +276,6 @@ def run(cfg: DictConfig) -> dict:
         num_workers=0,
     )
 
-    layer_names = ["layer1", "layer2", "layer3", "layer4", "fc"]
     extractor = RepresentationExtractor(layer_names=layer_names, device=str(device))
     cka = CKAAnalyzer()
     rsa = RSAAnalyzer()
@@ -245,7 +299,7 @@ def run(cfg: DictConfig) -> dict:
         probe_loader=probe_loader,
         community_map=client_id_to_community,
         test_loader=test_loader,
-        primary_layer="layer4",
+        primary_layer=layer_names[-2],
         device=str(device),
     )
 

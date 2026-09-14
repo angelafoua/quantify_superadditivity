@@ -15,14 +15,14 @@ from superadditivity.training.lr_schedule import CosineDecaySchedule
 
 
 class TestDSGDCoordinator:
-    def test_runs_without_error(self, small_model, synthetic_dataset, device):
+    def test_runs_without_error(self, small_model, synthetic_dataset_simple, device):
         n_clients = 4
         base_model = small_model
 
         clients = []
         for cid in range(n_clients):
             indices = np.arange(cid * 50, (cid + 1) * 50)
-            dataset = ClientDataset(synthetic_dataset, indices, cid, run_seed=42)
+            dataset = ClientDataset(synthetic_dataset_simple, indices, cid, run_seed=42)
             model = clone_model(base_model)
             client = DecentralizedClient(
                 client_id=cid, model=model, dataset=dataset,
@@ -43,12 +43,12 @@ class TestDSGDCoordinator:
         assert len(history["round"]) == 3
         assert all(isinstance(l, float) for l in history["mean_loss"])
 
-    def test_loss_decreases_over_rounds(self, small_model, synthetic_dataset, device):
+    def test_loss_decreases_over_rounds(self, small_model, synthetic_dataset_simple, device):
         n_clients = 2
         clients = []
         for cid in range(n_clients):
             indices = np.arange(cid * 100, (cid + 1) * 100)
-            dataset = ClientDataset(synthetic_dataset, indices, cid, run_seed=42)
+            dataset = ClientDataset(synthetic_dataset_simple, indices, cid, run_seed=42)
             model = clone_model(small_model)
             client = DecentralizedClient(
                 client_id=cid, model=model, dataset=dataset,

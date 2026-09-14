@@ -66,7 +66,7 @@ class SemanticPartitioner:
         alpha: float,
         mode: str,
         run_seed: int,
-        num_clients: int = 128,
+        num_clients: int,
     ) -> None:
         if mode not in ("iid", "dirichlet_semantic"):
             raise ValueError(f"Unknown partitioner mode: {mode!r}")

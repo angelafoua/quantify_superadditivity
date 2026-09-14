@@ -1,0 +1,6 @@
+architecture: wide_resnet
+n_classes: ${data.n_classes}
+keep_on_device: true
+depth: 28
+widen_factor: 2
+dropout: 0.0

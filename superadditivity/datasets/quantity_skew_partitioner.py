@@ -32,7 +32,7 @@ class QuantitySkewPartitioner:
 
     def __init__(
         self,
-        n_clients: int = 128,
+        n_clients: int,
         alpha: float = 1.0,
         min_samples: int = 10,
     ) -> None:

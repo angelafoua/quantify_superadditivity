@@ -1,0 +1,6 @@
+dataset: speech_commands
+data_dir: data/speech_commands
+download: true
+partition_method: dirichlet_semantic
+dirichlet_alpha: 0.5
+n_classes: 35
