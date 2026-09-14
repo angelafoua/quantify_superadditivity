@@ -72,7 +72,7 @@ class DecentralizedClient:
     def _get_loader(self) -> DataLoader:
         if self._loader is None:
             g = torch.Generator()
-            g.manual_seed(self.client_id)
+            g.manual_seed(self.dataset.run_seed + self.client_id)
             self._loader = DataLoader(
                 self.dataset,
                 batch_size=self.batch_size,

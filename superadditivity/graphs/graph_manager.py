@@ -114,13 +114,21 @@ class GraphManager:
             return gen.generate()
 
         if topology == "erdos_renyi":
+            ref_p_in = float(getattr(cfg, "ref_p_in", 0.25))
+            ref_p_out = float(getattr(cfg, "ref_p_out", 0.01))
+            if not (hasattr(cfg, "p") and cfg.p is not None):
+                logger.info(
+                    "ER degree-matching uses ref_p_in=%.4f, ref_p_out=%.4f. "
+                    "Ensure these match the SBM config in the same factorial.",
+                    ref_p_in, ref_p_out,
+                )
             gen_er = ErdosRenyiGenerator(
                 n_clients=int(cfg.n_clients),
                 seed=self.graph_seed,
                 p=float(cfg.p) if hasattr(cfg, "p") and cfg.p is not None else None,
                 n_communities=int(cfg.n_communities),
-                ref_p_in=float(getattr(cfg, "ref_p_in", 0.25)),
-                ref_p_out=float(getattr(cfg, "ref_p_out", 0.01)),
+                ref_p_in=ref_p_in,
+                ref_p_out=ref_p_out,
             )
             return gen_er.generate()
 
