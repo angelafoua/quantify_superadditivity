@@ -152,6 +152,9 @@ class RepresentationExtractor:
             # Global average pooling for conv outputs: (B, C, H, W) -> (B, C)
             if act.dim() == 4:
                 act = act.mean(dim=(2, 3))
+            # Transformer blocks: (B, seq_len, dim) -> (B, dim) via CLS token
+            elif act.dim() == 3:
+                act = act[:, 0]
             activations[name].append(act.cpu().numpy())
 
         return hook
@@ -185,6 +188,8 @@ class RepresentationExtractor:
             act = input[0].detach()
             if act.dim() == 4:
                 act = act.mean(dim=(2, 3))
+            elif act.dim() == 3:
+                act = act[:, 0]
             activations[name].append(act.cpu().numpy())
 
         return hook
