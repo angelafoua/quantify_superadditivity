@@ -209,8 +209,16 @@ class SemanticPartitioner:
                     result[cid].extend(cls_idx[ptr : ptr + n])
                     ptr += n
 
-        # Log statistics
+        # Validate no client is empty
         sizes = [len(v) for v in result.values()]
+        n_empty = sizes.count(0)
+        if n_empty > 0:
+            raise ValueError(
+                f"Dirichlet partition produced {n_empty} empty client(s) "
+                f"(alpha={self.alpha:.4f}). Increase alpha or reduce "
+                f"n_clients to ensure every client receives data."
+            )
+
         logger.info(
             "Dirichlet-semantic partition: alpha=%.3f, samples per client "
             "min=%d, max=%d, mean=%.1f",
@@ -231,9 +239,12 @@ class SemanticPartitioner:
         For datasets with semantic clusters, each community gets the
         classes from its assigned clusters.  When ``semantic_clusters``
         is ``None`` (EMNIST), every community gets all classes.
+
+        Cluster-to-community assignment uses modular wrapping so that
+        when ``n_communities > n_clusters`` each community still gets
+        exactly one primary cluster (some clusters are shared).
         """
         if self.semantic_clusters is None:
-            # No semantic structure: all communities draw from all classes
             all_classes = list(range(self.num_classes))
             return {
                 comm_id: all_classes
@@ -243,38 +254,39 @@ class SemanticPartitioner:
         num_communities = len(self.community_assignments)
         num_clusters = len(self.semantic_clusters)
 
-        # Distribute clusters across communities as evenly as possible.
-        # If more communities than clusters, communities may share clusters.
         cluster_ids = sorted(self.semantic_clusters.keys())
         community_class_pools: Dict[int, List[int]] = {}
 
         for comm_idx, comm_id in enumerate(sorted(self.community_assignments.keys())):
-            # Assign cluster(s) to this community (round-robin)
-            assigned_clusters = [
-                cluster_ids[j]
-                for j in range(num_clusters)
-                if j % num_communities == comm_idx % num_communities
-            ]
-            # If no cluster assigned (more communities than clusters),
-            # wrap around
-            if not assigned_clusters:
+            if num_communities <= num_clusters:
+                # More clusters than communities: distribute evenly
+                assigned_clusters = [
+                    cluster_ids[j]
+                    for j in range(num_clusters)
+                    if j % num_communities == comm_idx
+                ]
+            else:
+                # More communities than clusters: wrap around
                 assigned_clusters = [cluster_ids[comm_idx % num_clusters]]
 
             classes: List[int] = []
             for cl_id in assigned_clusters:
                 cluster_def = self.semantic_clusters[cl_id]
                 if isinstance(cluster_def[0], str):
-                    # CIFAR-100: cluster_def is a list of superclass names
-                    # We need to resolve to fine-class indices. This
-                    # requires the dataset to provide class_to_idx.
                     classes.extend(
                         self._superclass_names_to_indices(cluster_def)
                     )
                 else:
-                    # CIFAR-10: cluster_def is already a list of class indices
                     classes.extend(int(x) for x in cluster_def)
 
             community_class_pools[comm_id] = sorted(set(classes))
+
+        if num_communities != num_clusters:
+            logger.warning(
+                "n_communities (%d) != n_semantic_clusters (%d): "
+                "some communities share the same class pool.",
+                num_communities, num_clusters,
+            )
 
         return community_class_pools
 
@@ -300,27 +312,10 @@ class SemanticPartitioner:
                         indices.append(class_to_idx[fn])
             return indices
 
-        # Fallback: use coarse labels from the CIFAR-100 dataset
-        # CIFAR-100 stores coarse_targets when available
-        if hasattr(ds, "targets") and hasattr(ds, "classes"):
-            # Build a mapping from superclass name -> set of fine indices
-            # by inspecting all samples.
-            # This is a last resort and only runs once.
-            logger.warning(
-                "class_to_idx not found; falling back to sequential "
-                "superclass index resolution."
-            )
-            all_superclass_names = list(SUPERCLASS_TO_FINE.keys())
-            indices = []
-            for sc in superclass_names:
-                sc_idx = all_superclass_names.index(sc)
-                # Each superclass has 5 consecutive fine classes
-                for k in range(5):
-                    indices.append(sc_idx * 5 + k)
-            return indices
-
         raise RuntimeError(
-            "Cannot resolve superclass names to fine-class indices."
+            "Cannot resolve superclass names to fine-class indices: "
+            "dataset has no class_to_idx attribute. Ensure the real "
+            "CIFAR-100 dataset is loaded (not a synthetic placeholder)."
         )
 
     @staticmethod

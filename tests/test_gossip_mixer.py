@@ -72,3 +72,34 @@ class TestGossipMixer:
         vals = [c.model.weight.item() for c in clients]
         global_mean_after = np.mean(vals)
         np.testing.assert_allclose(global_mean_before, global_mean_after, atol=1e-10)
+
+    def test_batchnorm_running_stats_not_mixed(self):
+        """BatchNorm running_mean/running_var must stay local per client."""
+        n = 3
+        W = torch.ones(n, n, dtype=torch.float64) / n
+        mixer = GossipMixer(mix_device="cpu")
+
+        # Build small models with BatchNorm
+        clients = []
+        running_means_before = []
+        for i in range(n):
+            model = nn.Sequential(
+                nn.Conv2d(1, 4, 3, padding=1, bias=False),
+                nn.BatchNorm2d(4),
+            )
+            # Set distinct running_mean per client
+            with torch.no_grad():
+                model[1].running_mean.fill_(float(i * 10))
+            clients.append(_FakeClient(model))
+            running_means_before.append(model[1].running_mean.clone())
+
+        mixer.mix(clients, W)
+
+        # Running means should be unchanged (not averaged)
+        for i, c in enumerate(clients):
+            np.testing.assert_allclose(
+                c.model[1].running_mean.numpy(),
+                running_means_before[i].numpy(),
+                atol=1e-12,
+                err_msg=f"Client {i} running_mean was mixed (should be local)",
+            )
