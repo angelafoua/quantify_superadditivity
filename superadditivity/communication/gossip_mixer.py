@@ -12,7 +12,7 @@ extensively in ``tests/test_gossip_mixer.py``.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Protocol, Sequence
+from typing import Dict, List, Protocol, Sequence
 
 import torch
 import torch.nn as nn
@@ -147,55 +147,49 @@ class GossipMixer:
     ) -> None:
         """Mix when models live on a different device than the mixer.
 
-        Pulls parameters to the mixing device, computes the weighted
-        combination, and pushes results back to each model's original device.
-        Buffers (e.g. BatchNorm running stats) are copied through unchanged.
+        Pulls parameters to the mixing device one key at a time, computes
+        the weighted combination, and writes results back in-place via
+        ``param.data.copy_()``.  This avoids allocating a full duplicate
+        set of model tensors on the original device, which would otherwise
+        double GPU memory for all N clients simultaneously.
+
+        Buffers (e.g. BatchNorm running stats) are not parameters and are
+        left untouched — each client keeps its own local batch-statistics.
         """
         param_keys = self._param_keys(clients[0].model)
 
-        # Snapshot all state dicts on the mixing device
-        state_dicts: List[Dict[str, torch.Tensor]] = []
-        for i in range(n):
-            sd = {
-                k: v.to(device=self.mix_device, dtype=self.dtype)
-                for k, v in clients[i].model.state_dict().items()
-            }
-            state_dicts.append(sd)
-
-        # Determine original device/dtype from client 0
-        original_sd = clients[0].model.state_dict()
-
-        new_state_dicts: List[Dict[str, torch.Tensor]] = [
-            {} for _ in range(n)
+        # Build a {name: param} lookup for every client so we can write
+        # mixed values back in-place without load_state_dict.
+        client_params: List[Dict[str, nn.Parameter]] = [
+            dict(clients[i].model.named_parameters()) for i in range(n)
         ]
 
-        all_keys = list(state_dicts[0].keys())
-        mix_keys = [k for k in all_keys if k in param_keys]
+        for name in client_params[0]:
+            if name not in param_keys:
+                continue
 
-        for key in mix_keys:
-            original_shape = original_sd[key].shape
-            original_dtype = original_sd[key].dtype
-            original_device = original_sd[key].device
+            original_dtype = client_params[0][name].dtype
+            original_device = client_params[0][name].device
+            original_shape = client_params[0][name].shape
 
+            # Pull this parameter from every client to the mixing device
             flat = torch.stack(
-                [state_dicts[i][key].reshape(-1) for i in range(n)], dim=0
+                [
+                    client_params[i][name]
+                    .detach()
+                    .to(device=self.mix_device, dtype=self.dtype)
+                    .reshape(-1)
+                    for i in range(n)
+                ],
+                dim=0,
             )  # (N, P)
 
             mixed = W @ flat  # (N, P)
 
+            # Write back in-place — no new GPU allocation
             for i in range(n):
-                new_val = (
-                    mixed[i]
-                    .reshape(original_shape)
-                    .to(dtype=original_dtype, device=original_device)
+                client_params[i][name].data.copy_(
+                    mixed[i].reshape(original_shape).to(
+                        dtype=original_dtype, device=original_device
+                    )
                 )
-                new_state_dicts[i][key] = new_val
-
-        # Copy buffers (non-parameter keys) through unchanged per client
-        buffer_keys = [k for k in all_keys if k not in param_keys]
-        for key in buffer_keys:
-            for i in range(n):
-                new_state_dicts[i][key] = clients[i].model.state_dict()[key]
-
-        for i in range(n):
-            clients[i].model.load_state_dict(new_state_dicts[i])
