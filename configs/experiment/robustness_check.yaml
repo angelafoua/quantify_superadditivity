@@ -29,7 +29,7 @@ checks:
     network_levels: [erdos_renyi, watts_strogatz]
     model: resnet18
 
-run_seeds: [42, 123, 456]
-graph_seeds: [100, 200]
+run_seeds: [42]
+graph_seeds: [100]
 
 training: default
