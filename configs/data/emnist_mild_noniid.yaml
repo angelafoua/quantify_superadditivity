@@ -1,0 +1,6 @@
+dataset: emnist
+data_dir: data/emnist
+download: true
+partition_method: dirichlet_semantic
+dirichlet_alpha: 10.0
+n_classes: 62

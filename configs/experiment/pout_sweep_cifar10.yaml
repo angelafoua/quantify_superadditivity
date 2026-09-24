@@ -1,0 +1,19 @@
+# Parametric sweep over p_out for CIFAR-10.
+# Used to map the I(α, β) surface on a different dataset.
+
+experiment_name: pout_sweep_cifar10
+
+data_levels:
+  - cifar10_iid
+  - cifar10_mild_noniid
+  - cifar10_noniid
+  - cifar10_severe_noniid
+
+p_out_values: [0.005, 0.02, 0.1, 0.3]
+p_in: 0.3
+
+run_seeds: [42]
+graph_seeds: [100]
+
+model: resnet18
+training: default

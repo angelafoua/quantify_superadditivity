@@ -1,0 +1,6 @@
+dataset: pathmnist
+data_dir: data/pathmnist
+download: true
+partition_method: dirichlet_semantic
+dirichlet_alpha: 10.0
+n_classes: 9

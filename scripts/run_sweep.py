@@ -128,8 +128,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run experiment sweep")
     parser.add_argument(
         "--experiment", required=True,
-        choices=["core_factorial", "extended_grid", "pout_sweep", "robustness_check"],
-        help="Experiment configuration to run.",
+        help="Experiment configuration to run (must match a YAML in configs/experiment/).",
     )
     args = parser.parse_args()
 
@@ -137,13 +136,16 @@ def main() -> None:
         Path(__file__).resolve().parent.parent
         / "configs" / "experiment" / f"{args.experiment}.yaml"
     )
+    if not config_path.exists():
+        logger.error("Config not found: %s", config_path)
+        sys.exit(1)
     cfg = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
 
     if args.experiment == "core_factorial":
         run_core_factorial(cfg)
     elif args.experiment == "extended_grid":
         run_extended_grid(cfg)
-    elif args.experiment == "pout_sweep":
+    elif args.experiment.startswith("pout_sweep"):
         run_pout_sweep(cfg)
     elif args.experiment == "robustness_check":
         logger.info("Robustness check: running each sub-experiment...")
