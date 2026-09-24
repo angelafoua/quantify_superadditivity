@@ -354,6 +354,20 @@ def run(cfg: DictConfig) -> dict:
     csv_logger.close()
     drift_tracker.save()
 
+    # Extract final-round drift metrics from the tracker for the summary.
+    primary_layer = layer_names[-2]
+    final_drift_metrics = {}
+    for key in sorted(drift_tracker._recorded_keys):
+        trajectory = drift_tracker.get_trajectory(key)
+        if trajectory.ndim == 1 and len(trajectory) > 0:
+            final_drift_metrics[f"final_{key}"] = float(trajectory[-1])
+    # Alias the primary-layer CKA mean as the canonical analysis column.
+    cka_key = f"cka_{primary_layer}_mean"
+    if cka_key in drift_tracker._recorded_keys:
+        traj = drift_tracker.get_trajectory(cka_key)
+        if len(traj) > 0:
+            final_drift_metrics["final_cka_cross_community"] = float(traj[-1])
+
     summary = {
         "experiment_name": cfg.experiment_name,
         "run_seed": run_seed,
@@ -368,6 +382,7 @@ def run(cfg: DictConfig) -> dict:
         "final_loss": history["mean_loss"][-1] if history["mean_loss"] else None,
         "wall_time": time.time() - t_start,
         **graph_metrics,
+        **final_drift_metrics,
     }
     save_json(summary, output_dir / "summary.json")
 
