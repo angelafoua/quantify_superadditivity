@@ -1,0 +1,6 @@
+dataset: domainnet
+data_dir: data/domainnet
+download: true
+partition_method: dirichlet_semantic
+dirichlet_alpha: 10.0
+n_classes: 345
