@@ -29,11 +29,36 @@ class ResultAggregator:
 
     def load_summaries(self) -> pd.DataFrame:
         """Load all ``summary.json`` files into a DataFrame."""
+        import re
+
         records: List[Dict[str, Any]] = []
         for summary_path in sorted(self.results_dir.rglob("summary.json")):
             try:
                 data = load_json(summary_path)
                 data["_run_dir"] = str(summary_path.parent)
+
+                # Parse p_out and data regime from folder name when absent.
+                # Expected pattern: *pout<value>_<data_regime>*
+                run_name = summary_path.parent.name
+                if "p_out" not in data:
+                    m = re.search(r"pout([0-9]+(?:\.[0-9]+)?)", run_name)
+                    if m:
+                        data["p_out"] = float(m.group(1))
+                if "data_regime" not in data:
+                    for regime in ("severe_noniid", "moderate_noniid", "mild_noniid", "iid"):
+                        if regime in run_name:
+                            data["data_regime"] = regime
+                            break
+                # Map data regime to dirichlet_alpha when absent
+                if "dirichlet_alpha" not in data and "data_regime" in data:
+                    _alpha_map = {
+                        "iid": 1000.0,
+                        "mild_noniid": 1.0,
+                        "moderate_noniid": 0.3,
+                        "severe_noniid": 0.05,
+                    }
+                    data["dirichlet_alpha"] = _alpha_map.get(data["data_regime"])
+
                 records.append(data)
             except Exception as e:
                 logger.warning("Failed to load %s: %s", summary_path, e)
