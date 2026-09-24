@@ -37,16 +37,21 @@ class ResultAggregator:
                 data = load_json(summary_path)
                 data["_run_dir"] = str(summary_path.parent)
 
-                # Parse p_out and data regime from folder name when absent.
-                # Expected pattern: *pout<value>_<data_regime>*
-                run_name = summary_path.parent.name
+                # Parse p_out and data regime from ancestor folder names when absent.
+                # Walk from immediate parent up to (but not including) results_dir.
+                ancestor_names = [
+                    p.name
+                    for p in summary_path.parents
+                    if p != self.results_dir and self.results_dir in p.parents or p == summary_path.parent
+                ]
+                combined = " ".join(ancestor_names)
                 if "p_out" not in data:
-                    m = re.search(r"pout([0-9]+(?:\.[0-9]+)?)", run_name)
+                    m = re.search(r"pout([0-9]+(?:\.[0-9]+)?)", combined)
                     if m:
                         data["p_out"] = float(m.group(1))
                 if "data_regime" not in data:
                     for regime in ("severe_noniid", "moderate_noniid", "mild_noniid", "iid"):
-                        if regime in run_name:
+                        if regime in combined:
                             data["data_regime"] = regime
                             break
                 # Map data regime to dirichlet_alpha when absent
