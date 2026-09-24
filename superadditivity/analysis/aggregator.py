@@ -64,6 +64,10 @@ class ResultAggregator:
                     }
                     data["dirichlet_alpha"] = _alpha_map.get(data["data_regime"])
 
+                # Backfill final drift metrics from drift_metrics.h5 when absent.
+                if "final_cka_cross_community" not in data:
+                    data = self._backfill_drift_metrics(data, summary_path.parent)
+
                 records.append(data)
             except Exception as e:
                 logger.warning("Failed to load %s: %s", summary_path, e)
@@ -75,6 +79,53 @@ class ResultAggregator:
         df = pd.DataFrame(records)
         logger.info("Loaded %d run summaries from %s", len(df), self.results_dir)
         return df
+
+    @staticmethod
+    def _backfill_drift_metrics(
+        data: Dict[str, Any], run_dir: Path
+    ) -> Dict[str, Any]:
+        """Extract final drift metrics from drift_metrics.h5 into *data*."""
+        import h5py
+
+        h5_path = run_dir / "drift_metrics.h5"
+        if not h5_path.exists():
+            return data
+
+        try:
+            with h5py.File(h5_path, "r") as fh:
+                metrics_grp = fh.get("metrics")
+                if metrics_grp is None:
+                    return data
+
+                # Find the primary-layer CKA mean key (e.g. cka_layer4_mean).
+                cka_mean_keys = sorted(
+                    k for k in metrics_grp.keys()
+                    if k.startswith("cka_") and k.endswith("_mean")
+                )
+
+                for key in metrics_grp.keys():
+                    values_ds = metrics_grp.get(f"{key}/values")
+                    if values_ds is None:
+                        continue
+                    arr = values_ds[()]
+                    if arr.ndim == 1 and len(arr) > 0:
+                        data[f"final_{key}"] = float(arr[-1])
+
+                # Alias the deepest CKA layer mean as the canonical column.
+                # The primary layer is the second-to-last in sorted order
+                # (layer4 before fc, layer3 before fc, etc.), matching
+                # run_experiment.py's layer_names[-2].
+                if cka_mean_keys:
+                    primary_key = cka_mean_keys[-1]
+                    values_ds = metrics_grp.get(f"{primary_key}/values")
+                    if values_ds is not None:
+                        arr = values_ds[()]
+                        if arr.ndim == 1 and len(arr) > 0:
+                            data["final_cka_cross_community"] = float(arr[-1])
+        except Exception as exc:
+            logger.debug("Could not backfill from %s: %s", h5_path, exc)
+
+        return data
 
     def load_trajectories(
         self,
