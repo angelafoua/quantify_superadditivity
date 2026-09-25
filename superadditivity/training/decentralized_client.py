@@ -54,7 +54,7 @@ class DecentralizedClient:
         local_steps: int = 1,
     ) -> None:
         self.client_id = client_id
-        self.model = model.to(device)
+        self.model = model.cpu()
         self.dataset = dataset
         self.device = device
         self.batch_size = batch_size
@@ -89,6 +89,13 @@ class DecentralizedClient:
         for pg in self.optimizer.param_groups:
             pg["lr"] = lr
 
+    def _move_optimizer_state(self, device: torch.device) -> None:
+        """Move optimizer momentum buffers to ``device``."""
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+
     def local_step(self, round_num: int) -> float:
         """Perform ``local_steps`` SGD updates and return the mean loss."""
         self.dataset.set_round(round_num)
@@ -97,6 +104,7 @@ class DecentralizedClient:
         steps_done = 0
 
         self.model.to(self.device)
+        self._move_optimizer_state(self.device)
         data_iter = iter(loader)
 
         for _ in range(self.local_steps):
@@ -112,6 +120,9 @@ class DecentralizedClient:
             )
             total_loss += loss
             steps_done += 1
+
+        self.model.cpu()
+        self._move_optimizer_state(torch.device("cpu"))
 
         return total_loss / max(steps_done, 1)
 
