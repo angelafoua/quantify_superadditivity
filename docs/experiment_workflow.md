@@ -56,12 +56,22 @@ defaults:
   - graph: sbm_medium
   - model: resnet18
   - training: default
+  - _self_
 
-n_clients: 128
+experiment_name: superadditivity_experiment
+output_dir: outputs/${experiment_name}
+
+n_clients: 32
 n_communities: 4
+
 run_seed: 42
 graph_seed: 100
 ```
+
+> **Note:** `n_clients` defaults to **32** (with `n_communities: 4`, i.e. 8
+> clients per community). `n_clients` must be a multiple of `n_communities`,
+> validated at startup. Sweeps and older notes may reference other client
+> counts, but 32 is the current default.
 
 ### Config groups
 
@@ -75,6 +85,13 @@ graph_seed: 100
 
 ### Data configs
 
+Seven datasets are supported: **CIFAR-100** (primary), **CIFAR-10**,
+**Federated EMNIST**, **DomainNet** (clipart), **iNaturalist** (200-class
+subset), **PathMNIST**, and **Google Speech Commands**. The full registry lives
+in [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/dataset_loader.py).
+
+**CIFAR-100 (primary):**
+
 | File | Partition method | Description |
 |------|-----------------|-------------|
 | [`configs/data/iid.yaml`](../configs/data/iid.yaml) | `iid` | Uniform random assignment |
@@ -82,10 +99,31 @@ graph_seed: 100
 | [`configs/data/moderate_noniid.yaml`](../configs/data/moderate_noniid.yaml) | `dirichlet` | Dirichlet α=0.5 label skew |
 | [`configs/data/severe_noniid.yaml`](../configs/data/severe_noniid.yaml) | `dirichlet` | Dirichlet α=0.1 label skew |
 | [`configs/data/quantity_skew.yaml`](../configs/data/quantity_skew.yaml) | `quantity_skew` | IID labels, skewed sample counts (negative control) |
-| [`configs/data/cifar10_iid.yaml`](../configs/data/cifar10_iid.yaml) | `iid` | CIFAR-10, IID (robustness check) |
-| [`configs/data/cifar10_noniid.yaml`](../configs/data/cifar10_noniid.yaml) | `dirichlet` | CIFAR-10, Non-IID |
+
+**Other datasets (robustness checks):**
+
+| File | Partition method | Description |
+|------|-----------------|-------------|
+| [`configs/data/cifar10_iid.yaml`](../configs/data/cifar10_iid.yaml) | `iid` | CIFAR-10, IID |
+| [`configs/data/cifar10_mild_noniid.yaml`](../configs/data/cifar10_mild_noniid.yaml) | `dirichlet` | CIFAR-10, mild Non-IID |
+| [`configs/data/cifar10_noniid.yaml`](../configs/data/cifar10_noniid.yaml) | `dirichlet` | CIFAR-10, moderate Non-IID |
+| [`configs/data/cifar10_severe_noniid.yaml`](../configs/data/cifar10_severe_noniid.yaml) | `dirichlet` | CIFAR-10, severe Non-IID |
 | [`configs/data/emnist_iid.yaml`](../configs/data/emnist_iid.yaml) | `iid` | Federated EMNIST, IID |
-| [`configs/data/emnist_noniid.yaml`](../configs/data/emnist_noniid.yaml) | `dirichlet` | Federated EMNIST, Non-IID |
+| [`configs/data/emnist_mild_noniid.yaml`](../configs/data/emnist_mild_noniid.yaml) | `dirichlet` | Federated EMNIST, mild Non-IID |
+| [`configs/data/emnist_noniid.yaml`](../configs/data/emnist_noniid.yaml) | `dirichlet` | Federated EMNIST, moderate Non-IID |
+| [`configs/data/emnist_severe_noniid.yaml`](../configs/data/emnist_severe_noniid.yaml) | `dirichlet` | Federated EMNIST, severe Non-IID |
+| [`configs/data/domainnet_iid.yaml`](../configs/data/domainnet_iid.yaml) | `iid` | DomainNet (clipart), IID |
+| [`configs/data/domainnet_mild_noniid.yaml`](../configs/data/domainnet_mild_noniid.yaml) | `dirichlet` | DomainNet, mild Non-IID |
+| [`configs/data/domainnet_noniid.yaml`](../configs/data/domainnet_noniid.yaml) | `dirichlet` | DomainNet, moderate Non-IID |
+| [`configs/data/domainnet_severe_noniid.yaml`](../configs/data/domainnet_severe_noniid.yaml) | `dirichlet` | DomainNet, severe Non-IID |
+| [`configs/data/inaturalist_iid.yaml`](../configs/data/inaturalist_iid.yaml) | `iid` | iNaturalist (200-class subset), IID |
+| [`configs/data/inaturalist_noniid.yaml`](../configs/data/inaturalist_noniid.yaml) | `dirichlet` | iNaturalist, Non-IID |
+| [`configs/data/pathmnist_iid.yaml`](../configs/data/pathmnist_iid.yaml) | `iid` | PathMNIST, IID |
+| [`configs/data/pathmnist_mild_noniid.yaml`](../configs/data/pathmnist_mild_noniid.yaml) | `dirichlet` | PathMNIST, mild Non-IID |
+| [`configs/data/pathmnist_noniid.yaml`](../configs/data/pathmnist_noniid.yaml) | `dirichlet` | PathMNIST, moderate Non-IID |
+| [`configs/data/pathmnist_severe_noniid.yaml`](../configs/data/pathmnist_severe_noniid.yaml) | `dirichlet` | PathMNIST, severe Non-IID |
+| [`configs/data/speech_commands_iid.yaml`](../configs/data/speech_commands_iid.yaml) | `iid` | Google Speech Commands, IID |
+| [`configs/data/speech_commands_noniid.yaml`](../configs/data/speech_commands_noniid.yaml) | `dirichlet` | Google Speech Commands, Non-IID |
 
 ### Graph configs
 
@@ -105,6 +143,12 @@ graph_seed: 100
 |------|-------------|
 | [`configs/model/resnet18.yaml`](../configs/model/resnet18.yaml) | ResNet-18 (CIFAR variant, primary) |
 | [`configs/model/convnet.yaml`](../configs/model/convnet.yaml) | SimpleConvNet (4-layer, robustness check) |
+| [`configs/model/wide_resnet.yaml`](../configs/model/wide_resnet.yaml) | WideResNet-28-2 (robustness check) |
+| [`configs/model/vit_tiny.yaml`](../configs/model/vit_tiny.yaml) | ViT-Tiny (Vision Transformer, robustness check) |
+
+The model registry in [`scripts/run_experiment.py`](../scripts/run_experiment.py)
+(`MODEL_REGISTRY`) also exposes a `resnet34_cifar` architecture (deeper ResNet,
+same interface), which can be selected via `model.architecture=resnet34_cifar`.
 
 ### Training config
 
@@ -130,7 +174,7 @@ The `run()` function executes these steps in order:
 
 1. **Seed everything** — calls `set_all_seeds(run_seed)` from [`superadditivity/utils/seed.py`](../superadditivity/utils/seed.py). The probe set is always seeded with the fixed constant `PROBE_SEED=999`, independent of `run_seed`.
 
-2. **Load dataset** — [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/dataset_loader.py) downloads/caches CIFAR-100, CIFAR-10, or EMNIST and exposes `get_semantic_clusters()` and `get_probe_set()`.
+2. **Load dataset** — [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/dataset_loader.py) downloads/caches one of the seven supported datasets (CIFAR-100, CIFAR-10, EMNIST, DomainNet, iNaturalist, PathMNIST, Speech Commands) and exposes `get_semantic_clusters()` and `get_probe_set()`.
 
 3. **Build graph** — [`superadditivity/graphs/graph_manager.py`](../superadditivity/graphs/graph_manager.py) constructs the adjacency graph via the appropriate generator:
    - [`superadditivity/graphs/sbm_generator.py`](../superadditivity/graphs/sbm_generator.py) — Stochastic Block Model
@@ -140,16 +184,18 @@ The `run()` function executes these steps in order:
    - [`superadditivity/graphs/mixing_matrix.py`](../superadditivity/graphs/mixing_matrix.py) — produces the doubly-stochastic symmetric mixing matrix W
    - [`superadditivity/graphs/graph_metrics.py`](../superadditivity/graphs/graph_metrics.py) — spectral gap, conductance, etc.
 
-4. **Partition data** — assigns training samples to 128 clients:
+4. **Partition data** — assigns training samples to the `n_clients` clients (32 by default):
    - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew within semantic clusters (IID or non-IID modes)
    - [`superadditivity/datasets/quantity_skew_partitioner.py`](../superadditivity/datasets/quantity_skew_partitioner.py) — IID labels with skewed sample counts
    - [`superadditivity/datasets/client_dataset.py`](../superadditivity/datasets/client_dataset.py) — wraps indices into per-client `Dataset` objects
 
-5. **Initialise model** — all 128 clients start from the same weights. The model is built by `build_model()` in [`scripts/run_experiment.py`](../scripts/run_experiment.py) and weight-initialised via [`superadditivity/models/model_utils.py`](../superadditivity/models/model_utils.py):
-   - [`superadditivity/models/resnet.py`](../superadditivity/models/resnet.py) — CIFAR-adapted ResNet-18 with 3×3 stride-1 stem
+5. **Initialise model** — all clients start from the same weights. The model is built by `build_model()` in [`scripts/run_experiment.py`](../scripts/run_experiment.py) and weight-initialised via [`superadditivity/models/model_utils.py`](../superadditivity/models/model_utils.py):
+   - [`superadditivity/models/resnet.py`](../superadditivity/models/resnet.py) — CIFAR-adapted ResNet-18/34 with 3×3 stride-1 stem
    - [`superadditivity/models/convnet.py`](../superadditivity/models/convnet.py) — lightweight 4-layer ConvNet
+   - [`superadditivity/models/wide_resnet.py`](../superadditivity/models/wide_resnet.py) — WideResNet-28-2
+   - [`superadditivity/models/vit.py`](../superadditivity/models/vit.py) — ViT-Tiny
 
-6. **Create clients** — 128 [`superadditivity/training/decentralized_client.py`](../superadditivity/training/decentralized_client.py) instances, each holding a model copy, local dataset, and SGD optimizer.
+6. **Create clients** — `n_clients` [`superadditivity/training/decentralized_client.py`](../superadditivity/training/decentralized_client.py) instances (32 by default), each holding a model copy, local dataset, and SGD optimizer.
 
 7. **Run D-SGD** — the coordinator drives the training loop. The algorithm is selected by `cfg.training.algorithm`:
    - `dsgd` (default): [`superadditivity/training/dsgd_coordinator.py`](../superadditivity/training/dsgd_coordinator.py) — local SGD followed by gossip mixing via [`superadditivity/communication/gossip_mixer.py`](../superadditivity/communication/gossip_mixer.py)
@@ -201,6 +247,10 @@ python scripts/run_sweep.py --experiment extended_grid
 # Parametric p_out sweep (for I(α,β) surface)
 python scripts/run_sweep.py --experiment pout_sweep
 
+# Per-dataset p_out sweeps (same runner, different dataset)
+python scripts/run_sweep.py --experiment pout_sweep_cifar10
+python scripts/run_sweep.py --experiment pout_sweep_emnist
+
 # Robustness checks (different datasets, models, topologies)
 python scripts/run_sweep.py --experiment robustness_check
 ```
@@ -211,8 +261,16 @@ python scripts/run_sweep.py --experiment robustness_check
 |------|-------------|
 | [`core_factorial.yaml`](../configs/experiment/core_factorial.yaml) | 4 cells (A/B/C/D), 5 run_seeds × 3 graph_seeds each |
 | [`extended_grid.yaml`](../configs/experiment/extended_grid.yaml) | 4 data levels × 4 network levels |
-| [`pout_sweep.yaml`](../configs/experiment/pout_sweep.yaml) | Varying p_out for I(α,β) surface fit |
-| [`robustness_check.yaml`](../configs/experiment/robustness_check.yaml) | Alternative datasets (CIFAR-10, EMNIST) and models (ConvNet) |
+| [`pout_sweep.yaml`](../configs/experiment/pout_sweep.yaml) | Varying p_out for I(α,β) surface fit (CIFAR-100) |
+| [`pout_sweep_cifar10.yaml`](../configs/experiment/pout_sweep_cifar10.yaml) | p_out sweep on CIFAR-10 |
+| [`pout_sweep_emnist.yaml`](../configs/experiment/pout_sweep_emnist.yaml) | p_out sweep on Federated EMNIST |
+| [`pout_sweep_pathmnist.yaml`](../configs/experiment/pout_sweep_pathmnist.yaml) | p_out sweep on PathMNIST |
+| [`pout_sweep_domainnet.yaml`](../configs/experiment/pout_sweep_domainnet.yaml) | p_out sweep on DomainNet |
+| [`robustness_check.yaml`](../configs/experiment/robustness_check.yaml) | Alternative datasets (CIFAR-10, EMNIST), models (ConvNet), heterogeneity (quantity skew), and topologies (Watts-Strogatz) |
+
+Any experiment whose name starts with `pout_sweep` (e.g. `pout_sweep_cifar10`)
+is dispatched through the parametric p_out sweep runner, so the per-dataset
+variants run with the same driver as `pout_sweep`.
 
 #### Core factorial design
 
@@ -349,5 +407,5 @@ The following must never be broken:
 1. **Mixing matrix W** is doubly stochastic and symmetric. Tested in [`tests/test_mixing_matrix.py`](../tests/test_mixing_matrix.py).
 2. **Gossip mixing** computes `new[i] = Σ_j W[i,j] · params[j]` exactly. Tested in [`tests/test_gossip_mixer.py`](../tests/test_gossip_mixer.py).
 3. **Probe set** uses the fixed seed `PROBE_SEED=999` in [`superadditivity/utils/seed.py`](../superadditivity/utils/seed.py) and never depends on `run_seed`.
-4. **All 128 clients** start from identical model weights (seeded by `run_seed`).
+4. **All clients** start from identical model weights (seeded by `run_seed`); `n_clients` must be a multiple of `n_communities`.
 5. **All drift metrics** are computed in float64 for numerical stability.
