@@ -1,0 +1,35 @@
+# Quick validation of the core 2×2 factorial — 1 run_seed × 1 graph_seed per
+# cell = 4 runs total (vs. 60 for the full core_factorial). Use this to confirm
+# the whole pipeline runs end-to-end and that the interaction term I is
+# directionally present before committing many GPU-hours on a free tier.
+#
+# Same four cells as core_factorial; only the seed counts differ.
+
+experiment_name: core_factorial_quick
+
+cells:
+  A_iid_er:
+    data: iid
+    graph: erdos_renyi
+    label: "IID + Dense"
+
+  B_noniid_er:
+    data: moderate_noniid
+    graph: erdos_renyi
+    label: "Non-IID + Dense"
+
+  C_iid_sbm:
+    data: iid
+    graph: sbm_medium
+    label: "IID + Community"
+
+  D_noniid_sbm:
+    data: moderate_noniid
+    graph: sbm_medium
+    label: "Non-IID + Community"
+
+run_seeds: [42]
+graph_seeds: [100]
+
+model: resnet18
+training: default

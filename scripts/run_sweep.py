@@ -23,7 +23,22 @@ from superadditivity.utils.io import load_json, save_json, ensure_dir
 logger = logging.getLogger(__name__)
 
 
-def run_core_factorial(cfg: dict) -> None:
+def _is_complete(run_cfg: "DictConfig") -> bool:
+    """Return True if this run already finished (its summary.json exists).
+
+    A run writes ``summary.json`` only after it completes, so its presence is a
+    reliable "done" marker. This lets a sweep resume after an interrupted
+    session (e.g. a free-tier GPU disconnect) without repeating finished runs.
+    """
+    summary = (
+        Path(run_cfg.output_dir)
+        / f"seed_{run_cfg.run_seed}_graph_{run_cfg.graph_seed}"
+        / "summary.json"
+    )
+    return summary.exists()
+
+
+def run_core_factorial(cfg: dict, resume: bool = False) -> None:
     """Run all cells of the core 2×2 factorial."""
     from scripts.run_experiment import run
 
@@ -45,13 +60,16 @@ def run_core_factorial(cfg: dict) -> None:
                     f"experiment_name={cfg['experiment_name']}_{cell_name}",
                 ]
                 run_cfg = _build_config(overrides)
+                if resume and _is_complete(run_cfg):
+                    logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                    continue
                 try:
                     run(run_cfg)
                 except Exception as e:
                     logger.error("Failed: %s (cell=%s, rs=%d, gs=%d)", e, cell_name, run_seed, graph_seed)
 
 
-def run_extended_grid(cfg: dict) -> None:
+def run_extended_grid(cfg: dict, resume: bool = False) -> None:
     """Run all cells of the extended 4×4 factorial."""
     from scripts.run_experiment import run
 
@@ -73,13 +91,16 @@ def run_extended_grid(cfg: dict) -> None:
                         f"experiment_name={cfg['experiment_name']}_{data_level}_{network_level}",
                     ]
                     run_cfg = _build_config(overrides)
+                    if resume and _is_complete(run_cfg):
+                        logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                        continue
                     try:
                         run(run_cfg)
                     except Exception as e:
                         logger.error("Failed: %s", e)
 
 
-def run_pout_sweep(cfg: dict) -> None:
+def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
     """Run parametric p_out sweep."""
     from scripts.run_experiment import run
 
@@ -103,6 +124,9 @@ def run_pout_sweep(cfg: dict) -> None:
                         f"experiment_name={cfg['experiment_name']}_pout{p_out}_{data_level}",
                     ]
                     run_cfg = _build_config(overrides)
+                    if resume and _is_complete(run_cfg):
+                        logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                        continue
                     try:
                         run(run_cfg)
                     except Exception as e:
@@ -130,6 +154,10 @@ def main() -> None:
         "--experiment", required=True,
         help="Experiment configuration to run (must match a YAML in configs/experiment/).",
     )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Skip runs that already have a summary.json (resume an interrupted sweep).",
+    )
     args = parser.parse_args()
 
     config_path = (
@@ -141,12 +169,12 @@ def main() -> None:
         sys.exit(1)
     cfg = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
 
-    if args.experiment == "core_factorial":
-        run_core_factorial(cfg)
+    if args.experiment.startswith("core_factorial"):
+        run_core_factorial(cfg, resume=args.resume)
     elif args.experiment == "extended_grid":
-        run_extended_grid(cfg)
+        run_extended_grid(cfg, resume=args.resume)
     elif args.experiment.startswith("pout_sweep"):
-        run_pout_sweep(cfg)
+        run_pout_sweep(cfg, resume=args.resume)
     elif args.experiment == "robustness_check":
         logger.info("Robustness check: running each sub-experiment...")
         for check_name, check_cfg in cfg["checks"].items():
@@ -165,6 +193,9 @@ def main() -> None:
                                 f"experiment_name=robustness_{check_name}",
                             ]
                             run_cfg = _build_config(overrides)
+                            if args.resume and _is_complete(run_cfg):
+                                logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                                continue
                             try:
                                 from scripts.run_experiment import run
                                 run(run_cfg)
