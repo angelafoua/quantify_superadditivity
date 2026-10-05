@@ -61,17 +61,17 @@ defaults:
 experiment_name: superadditivity_experiment
 output_dir: outputs/${experiment_name}
 
-n_clients: 32
+n_clients: 16
 n_communities: 4
 
 run_seed: 42
 graph_seed: 100
 ```
 
-> **Note:** `n_clients` defaults to **32** (with `n_communities: 4`, i.e. 8
+> **Note:** `n_clients` defaults to **16** (with `n_communities: 4`, i.e. 4
 > clients per community). `n_clients` must be a multiple of `n_communities`,
 > validated at startup. Sweeps and older notes may reference other client
-> counts, but 32 is the current default.
+> counts, but 16 is the current default.
 
 ### Config groups
 
@@ -184,7 +184,7 @@ The `run()` function executes these steps in order:
    - [`superadditivity/graphs/mixing_matrix.py`](../superadditivity/graphs/mixing_matrix.py) — produces the doubly-stochastic symmetric mixing matrix W
    - [`superadditivity/graphs/graph_metrics.py`](../superadditivity/graphs/graph_metrics.py) — spectral gap, conductance, etc.
 
-4. **Partition data** — assigns training samples to the `n_clients` clients (32 by default):
+4. **Partition data** — assigns training samples to the `n_clients` clients (16 by default):
    - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew within semantic clusters (IID or non-IID modes)
    - [`superadditivity/datasets/quantity_skew_partitioner.py`](../superadditivity/datasets/quantity_skew_partitioner.py) — IID labels with skewed sample counts
    - [`superadditivity/datasets/client_dataset.py`](../superadditivity/datasets/client_dataset.py) — wraps indices into per-client `Dataset` objects
@@ -195,7 +195,7 @@ The `run()` function executes these steps in order:
    - [`superadditivity/models/wide_resnet.py`](../superadditivity/models/wide_resnet.py) — WideResNet-28-2
    - [`superadditivity/models/vit.py`](../superadditivity/models/vit.py) — ViT-Tiny
 
-6. **Create clients** — `n_clients` [`superadditivity/training/decentralized_client.py`](../superadditivity/training/decentralized_client.py) instances (32 by default), each holding a model copy, local dataset, and SGD optimizer.
+6. **Create clients** — `n_clients` [`superadditivity/training/decentralized_client.py`](../superadditivity/training/decentralized_client.py) instances (16 by default), each holding a model copy, local dataset, and SGD optimizer.
 
 7. **Run D-SGD** — the coordinator drives the training loop. The algorithm is selected by `cfg.training.algorithm`:
    - `dsgd` (default): [`superadditivity/training/dsgd_coordinator.py`](../superadditivity/training/dsgd_coordinator.py) — local SGD followed by gossip mixing via [`superadditivity/communication/gossip_mixer.py`](../superadditivity/communication/gossip_mixer.py)
