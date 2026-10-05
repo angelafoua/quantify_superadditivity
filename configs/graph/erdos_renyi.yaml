@@ -2,4 +2,8 @@ topology: erdos_renyi
 n_clients: ${n_clients}
 n_communities: ${n_communities}
 edge_probability: null  # auto-matched to SBM expected density
+# Reference SBM params for degree-matching. Must match sbm_medium (the dense
+# baseline in the core factorial) so ER and SBM have equal expected density.
+ref_p_in: 0.7
+ref_p_out: 0.15
 seed: ${graph_seed}

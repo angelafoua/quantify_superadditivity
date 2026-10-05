@@ -1,6 +1,8 @@
+# Weak community structure (highest p_out, mildest contrast). Tuned for
+# n_clients=16.
 topology: sbm
 n_clients: ${n_clients}
 n_communities: ${n_communities}
-p_in: 0.3
-p_out: 0.1
+p_in: 0.7
+p_out: 0.3
 seed: ${graph_seed}
