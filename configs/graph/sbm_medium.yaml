@@ -1,6 +1,9 @@
+# Primary SBM. Probabilities tuned for n_clients=16 (4 communities of 4):
+# expected degree = 3*p_in + 12*p_out = 3.9 (> ln(16) ~= 2.77 connectivity
+# threshold), so the connected-graph retry loop succeeds reliably.
 topology: sbm
 n_clients: ${n_clients}
 n_communities: ${n_communities}
-p_in: 0.3
-p_out: 0.02
+p_in: 0.7
+p_out: 0.15
 seed: ${graph_seed}

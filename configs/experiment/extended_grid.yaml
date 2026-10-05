@@ -1,6 +1,6 @@
 # Extended 4×4 factorial:
 #   4 data levels: IID, mild (α=10), moderate (α=0.5), severe (α=0.1)
-#   4 network levels: ER, SBM weak (p_out=0.1), SBM medium (p_out=0.02), SBM strong (p_out=0.005)
+#   4 network levels: ER, SBM weak (p_out=0.3), SBM medium (p_out=0.15), SBM strong (p_out=0.07)
 #
 # 16 cells × 5 run_seeds × 3 graph_seeds = 240 runs.
 

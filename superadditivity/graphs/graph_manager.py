@@ -114,8 +114,8 @@ class GraphManager:
             return gen.generate()
 
         if topology == "erdos_renyi":
-            ref_p_in = float(getattr(cfg, "ref_p_in", 0.25))
-            ref_p_out = float(getattr(cfg, "ref_p_out", 0.01))
+            ref_p_in = float(getattr(cfg, "ref_p_in", 0.7))
+            ref_p_out = float(getattr(cfg, "ref_p_out", 0.15))
             if not (hasattr(cfg, "p") and cfg.p is not None):
                 logger.info(
                     "ER degree-matching uses ref_p_in=%.4f, ref_p_out=%.4f. "

@@ -1,6 +1,9 @@
+# Strong community structure (sharpest contrast, lowest p_out). Tuned for
+# n_clients=16: p_out=0.07 is the lowest value that still connects reliably
+# with only 4 nodes per community.
 topology: sbm
 n_clients: ${n_clients}
 n_communities: ${n_communities}
-p_in: 0.3
-p_out: 0.005
+p_in: 0.7
+p_out: 0.07
 seed: ${graph_seed}

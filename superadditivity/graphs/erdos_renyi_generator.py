@@ -89,8 +89,8 @@ class ErdosRenyiGenerator:
         p: Optional[float] = None,
         n_communities: int = 4,
         max_attempts: int = 100,
-        ref_p_in: float = 0.25,
-        ref_p_out: float = 0.01,
+        ref_p_in: float = 0.7,
+        ref_p_out: float = 0.15,
     ) -> None:
         self.n_clients = n_clients
         self.seed = seed

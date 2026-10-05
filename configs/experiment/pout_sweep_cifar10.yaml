@@ -9,8 +9,8 @@ data_levels:
   - cifar10_noniid
   - cifar10_severe_noniid
 
-p_out_values: [0.005, 0.02, 0.1, 0.3]
-p_in: 0.3
+p_out_values: [0.07, 0.15, 0.3, 0.5]  # tuned for n_clients=16; lower values cannot form connected graphs
+p_in: 0.7
 
 run_seeds: [42]
 graph_seeds: [100]
