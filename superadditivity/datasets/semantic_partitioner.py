@@ -209,16 +209,27 @@ class SemanticPartitioner:
                     result[cid].extend(cls_idx[ptr : ptr + n])
                     ptr += n
 
-        # Validate no client is empty
-        sizes = [len(v) for v in result.values()]
-        n_empty = sizes.count(0)
-        if n_empty > 0:
-            raise ValueError(
-                f"Dirichlet partition produced {n_empty} empty client(s) "
-                f"(alpha={self.alpha:.4f}). Increase alpha or reduce "
-                f"n_clients to ensure every client receives data."
+        # Guarantee every client has at least one sample by
+        # redistributing from the largest clients to empty ones.
+        empty_ids = [i for i in range(self.num_clients) if len(result[i]) == 0]
+        if empty_ids:
+            logger.warning(
+                "Dirichlet partition left %d client(s) empty (alpha=%.4f); "
+                "redistributing samples from largest clients.",
+                len(empty_ids),
+                self.alpha,
             )
+            for eid in empty_ids:
+                donor = max(result, key=lambda k: len(result[k]))
+                if len(result[donor]) < 2:
+                    raise ValueError(
+                        f"Cannot fix empty clients: largest client has only "
+                        f"{len(result[donor])} sample(s). Increase dataset "
+                        f"size or alpha."
+                    )
+                result[eid].append(result[donor].pop())
 
+        sizes = [len(v) for v in result.values()]
         logger.info(
             "Dirichlet-semantic partition: alpha=%.3f, samples per client "
             "min=%d, max=%d, mean=%.1f",
