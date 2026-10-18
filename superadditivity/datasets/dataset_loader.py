@@ -451,8 +451,8 @@ class DatasetLoader:
         """Load DomainNet (clipart domain for tractability).
 
         Uses torchvision ImageFolder on downloaded/extracted data.
-        Falls back to a synthetic placeholder if the data directory
-        does not exist yet (for tests).
+        Raises FileNotFoundError if the data directory is missing —
+        run ``scripts/prepare_domainnet.py`` first.
         """
         domain_dir = self.data_dir / "clipart"
         if domain_dir.exists():
@@ -464,11 +464,11 @@ class DatasetLoader:
             )
             return train_ds, test_ds
 
-        logger.warning(
-            "DomainNet directory not found at %s; using synthetic placeholder.",
-            domain_dir,
+        raise FileNotFoundError(
+            f"DomainNet clipart directory not found at {domain_dir}. "
+            f"Run 'python scripts/prepare_domainnet.py --data_dir {self.data_dir}' "
+            f"to download and organise the dataset before training."
         )
-        return self._synthetic_placeholder()
 
     def _load_inaturalist(
         self, train_tf: T.Compose, test_tf: T.Compose,
@@ -476,7 +476,7 @@ class DatasetLoader:
         """Load iNaturalist subset (200 classes).
 
         Uses torchvision ImageFolder on pre-organized directory structure.
-        Falls back to a synthetic placeholder if not available.
+        Raises FileNotFoundError if the data directory is missing.
         """
         data_root = self.data_dir
         train_dir = data_root / "train"
@@ -491,74 +491,73 @@ class DatasetLoader:
             )
             return train_ds, test_ds
 
-        logger.warning(
-            "iNaturalist directory not found at %s; using synthetic placeholder.",
-            data_root,
+        raise FileNotFoundError(
+            f"iNaturalist directory not found at {data_root}. "
+            f"Expected train/ and test/ subdirectories with ImageFolder layout. "
+            f"Download and organise the dataset before training."
         )
-        return self._synthetic_placeholder()
 
     def _load_pathmnist(
         self, train_tf: T.Compose, test_tf: T.Compose,
     ) -> Tuple[Dataset, Dataset]:
         """Load PathMNIST from the MedMNIST package.
 
-        Falls back to synthetic data if medmnist is not installed.
+        Raises ImportError if the medmnist package is not installed.
         """
         try:
             import medmnist
             from medmnist import PathMNIST as PathMNISTClass
-
-            train_ds = PathMNISTClass(
-                split="train", transform=train_tf,
-                download=self.download, root=str(self.data_dir),
-            )
-            test_ds = PathMNISTClass(
-                split="test", transform=test_tf,
-                download=self.download, root=str(self.data_dir),
-            )
-            # MedMNIST uses .labels instead of .targets; add targets attr
-            if not hasattr(train_ds, "targets"):
-                train_ds.targets = train_ds.labels.squeeze().tolist()
-            if not hasattr(test_ds, "targets"):
-                test_ds.targets = test_ds.labels.squeeze().tolist()
-            return train_ds, test_ds
         except ImportError:
-            logger.warning(
-                "medmnist package not installed; using synthetic placeholder "
-                "for PathMNIST. Install with: pip install medmnist"
-            )
-            return self._synthetic_placeholder()
+            raise ImportError(
+                "The 'medmnist' package is required for PathMNIST but is not "
+                "installed. Install it with: pip install medmnist"
+            ) from None
+
+        train_ds = PathMNISTClass(
+            split="train", transform=train_tf,
+            download=self.download, root=str(self.data_dir),
+        )
+        test_ds = PathMNISTClass(
+            split="test", transform=test_tf,
+            download=self.download, root=str(self.data_dir),
+        )
+        # MedMNIST uses .labels instead of .targets; add targets attr
+        if not hasattr(train_ds, "targets"):
+            train_ds.targets = train_ds.labels.squeeze().tolist()
+        if not hasattr(test_ds, "targets"):
+            test_ds.targets = test_ds.labels.squeeze().tolist()
+        return train_ds, test_ds
 
     def _load_speech_commands(self) -> Tuple[Dataset, Dataset]:
         """Load Google Speech Commands v2 as mel-spectrogram tensors.
 
         Converts 1-second audio clips into mel-spectrograms and packages
-        them as TensorDatasets. Falls back to synthetic data if
-        torchaudio is not available or download fails.
+        them as TensorDatasets. Raises on failure instead of silently
+        falling back to synthetic data.
         """
         spec = self.spec
         size = spec.image_size
 
         try:
             import torchaudio
-            train_ds_raw = torchaudio.datasets.SPEECHCOMMANDS(
-                root=str(self.data_dir), download=self.download,
-                subset="training",
-            )
-            test_ds_raw = torchaudio.datasets.SPEECHCOMMANDS(
-                root=str(self.data_dir), download=self.download,
-                subset="testing",
-            )
+        except ImportError:
+            raise ImportError(
+                "The 'torchaudio' package is required for Speech Commands "
+                "but is not installed. Install it with: pip install torchaudio"
+            ) from None
 
-            train_ds = self._speech_to_spectrograms(train_ds_raw, size)
-            test_ds = self._speech_to_spectrograms(test_ds_raw, size)
-            return train_ds, test_ds
+        train_ds_raw = torchaudio.datasets.SPEECHCOMMANDS(
+            root=str(self.data_dir), download=self.download,
+            subset="training",
+        )
+        test_ds_raw = torchaudio.datasets.SPEECHCOMMANDS(
+            root=str(self.data_dir), download=self.download,
+            subset="testing",
+        )
 
-        except Exception as e:
-            logger.warning(
-                "Failed to load Speech Commands: %s. Using synthetic placeholder.", e
-            )
-            return self._synthetic_placeholder()
+        train_ds = self._speech_to_spectrograms(train_ds_raw, size)
+        test_ds = self._speech_to_spectrograms(test_ds_raw, size)
+        return train_ds, test_ds
 
     @staticmethod
     def _speech_to_spectrograms(
