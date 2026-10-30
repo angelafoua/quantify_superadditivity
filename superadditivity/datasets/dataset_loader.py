@@ -872,14 +872,7 @@ class DatasetLoader:
 
         print(f"\n💾 Saving sample images to {output_path}")
 
-        # Save raw (untransformed) images if available
-        if self.dataset_name in ("cifar100", "cifar10", "emnist"):
-            raw_dataset = self._train_dataset  # Already raw for these
-        else:
-            # For other datasets, we may not have raw access
-            raw_dataset = None
-
-        # Try to visualize transformed images
+        # Visualize transformed images with denormalization
         try:
             fig, axes = plt.subplots(2, num_samples, figsize=(15, 5))
             if num_samples == 1:
