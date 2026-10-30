@@ -114,8 +114,12 @@ def organise_split(
     count = 0
     missing = 0
 
+    # Debug info
+    print(f"  Image root: {image_root}")
+    print(f"  Image root exists: {image_root.exists()}")
+
     with open(split_file) as f:
-        for line in f:
+        for i, line in enumerate(f):
             line = line.strip()
             if not line:
                 continue
@@ -136,6 +140,11 @@ def organise_split(
             # Try to find the image
             # image_root is typically .../clipart, so look for class_name/image
             src = image_root / img_rel
+
+            # Debug first 3 lines only
+            if i < 3:
+                print(f"  Line {i}: rel_path='{rel_path}' → looking at {src}")
+                print(f"          exists={src.exists()}")
 
             if not src.exists():
                 # Fallback: try with full path from split file
