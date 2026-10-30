@@ -769,3 +769,172 @@ class DatasetLoader:
                         fn, sc_name,
                     )
         return sorted(indices)
+
+    def validate_and_visualize(
+        self,
+        num_samples: int = 5,
+        output_dir: Optional[str] = None,
+    ) -> None:
+        """Print dataset statistics and optionally save sample images.
+
+        Parameters
+        ----------
+        num_samples:
+            Number of sample images to save (if images exist).
+        output_dir:
+            Directory to save sample images. If None, images are not saved.
+        """
+        if self._train_dataset is None or self._test_dataset is None:
+            raise RuntimeError("Call load() before validate_and_visualize().")
+
+        print("\n" + "="*70)
+        print(f"DATASET VALIDATION: {self.dataset_name.upper()}")
+        print("="*70)
+
+        # ---- Basic Statistics ----
+        n_train = len(self._train_dataset)
+        n_test = len(self._test_dataset)
+        print(f"\n📊 Dataset Size:")
+        print(f"   Train samples: {n_train:,}")
+        print(f"   Test samples:  {n_test:,}")
+        print(f"   Total:         {n_train + n_test:,}")
+
+        # ---- Get targets to analyze class distribution ----
+        train_targets = np.array(self._get_targets(self._train_dataset))
+        test_targets = np.array(self._get_targets(self._test_dataset))
+
+        unique_train_classes = np.unique(train_targets)
+        unique_test_classes = np.unique(test_targets)
+
+        print(f"\n🏷️  Class Information:")
+        print(f"   Train classes: {len(unique_train_classes)}")
+        print(f"   Test classes:  {len(unique_test_classes)}")
+        print(f"   Expected:      {self.spec.num_classes}")
+
+        # Class distribution in train set
+        train_class_counts = np.bincount(train_targets)
+        print(f"\n   Train class distribution:")
+        print(f"      Min samples/class:  {train_class_counts.min()}")
+        print(f"      Max samples/class:  {train_class_counts.max()}")
+        print(f"      Mean samples/class: {train_class_counts.mean():.1f}")
+        print(f"      Std samples/class:  {train_class_counts.std():.1f}")
+
+        # Class distribution in test set
+        test_class_counts = np.bincount(test_targets)
+        print(f"\n   Test class distribution:")
+        print(f"      Min samples/class:  {test_class_counts.min()}")
+        print(f"      Max samples/class:  {test_class_counts.max()}")
+        print(f"      Mean samples/class: {test_class_counts.mean():.1f}")
+
+        # ---- Image Metadata ----
+        print(f"\n🖼️  Image Metadata:")
+        print(f"   Size:        {self.spec.image_size}×{self.spec.image_size}")
+        print(f"   Channels:    {self.spec.in_channels}")
+        print(f"   Normalization mean: {self.spec.mean}")
+        print(f"   Normalization std:  {self.spec.std}")
+
+        # ---- Sample a batch to check shapes ----
+        print(f"\n🔍 Sample Batch (first 3 samples):")
+        try:
+            for i in range(min(3, len(self._train_dataset))):
+                sample = self._train_dataset[i]
+                if isinstance(sample, tuple):
+                    x, y = sample[0], sample[1]
+                    if isinstance(x, torch.Tensor):
+                        print(f"   Sample {i}: shape={tuple(x.shape)}, dtype={x.dtype}, "
+                              f"class={y}")
+                    else:
+                        print(f"   Sample {i}: shape={np.array(x).shape}, class={y}")
+        except Exception as e:
+            logger.warning(f"Could not inspect sample batch: {e}")
+
+        # ---- Save sample images ----
+        if output_dir is not None:
+            self._save_sample_images(num_samples, output_dir)
+
+        print("\n" + "="*70)
+        print("✅ Validation complete!\n")
+
+    def _save_sample_images(self, num_samples: int, output_dir: str) -> None:
+        """Save sample images from train and test sets."""
+        try:
+            from PIL import Image
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.warning(
+                "PIL or matplotlib not available; skipping image saving. "
+                "Install with: pip install pillow matplotlib"
+            )
+            return
+
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        print(f"\n💾 Saving sample images to {output_path}")
+
+        # Save raw (untransformed) images if available
+        if self.dataset_name in ("cifar100", "cifar10", "emnist"):
+            raw_dataset = self._train_dataset  # Already raw for these
+        else:
+            # For other datasets, we may not have raw access
+            raw_dataset = None
+
+        # Try to visualize transformed images
+        try:
+            fig, axes = plt.subplots(2, num_samples, figsize=(15, 5))
+            if num_samples == 1:
+                axes = axes.reshape(2, 1)
+
+            # Train set samples
+            for i in range(min(num_samples, len(self._train_dataset))):
+                x, y = self._train_dataset[i]
+                if isinstance(x, torch.Tensor):
+                    # Denormalize if possible
+                    x_np = self._denormalize(x.numpy())
+                    axes[0, i].imshow(x_np)
+                elif isinstance(x, Image.Image):
+                    axes[0, i].imshow(x)
+                else:
+                    axes[0, i].imshow(np.array(x))
+                axes[0, i].set_title(f"Train - Class {y}")
+                axes[0, i].axis("off")
+
+            # Test set samples
+            for i in range(min(num_samples, len(self._test_dataset))):
+                x, y = self._test_dataset[i]
+                if isinstance(x, torch.Tensor):
+                    x_np = self._denormalize(x.numpy())
+                    axes[1, i].imshow(x_np)
+                elif isinstance(x, Image.Image):
+                    axes[1, i].imshow(x)
+                else:
+                    axes[1, i].imshow(np.array(x))
+                axes[1, i].set_title(f"Test - Class {y}")
+                axes[1, i].axis("off")
+
+            plt.suptitle(f"{self.dataset_name.upper()} Dataset Samples")
+            plt.tight_layout()
+            save_path = output_path / f"{self.dataset_name}_samples.png"
+            plt.savefig(str(save_path), dpi=100, bbox_inches="tight")
+            print(f"   ✓ Saved to {save_path}")
+            plt.close()
+
+        except Exception as e:
+            logger.warning(f"Could not save visualization: {e}")
+
+    def _denormalize(self, x: np.ndarray) -> np.ndarray:
+        """Denormalize image from normalized values."""
+        # x is CHW or HW
+        mean = np.array(self.spec.mean).reshape(-1, 1, 1) if len(x.shape) == 3 else np.array(self.spec.mean)
+        std = np.array(self.spec.std).reshape(-1, 1, 1) if len(x.shape) == 3 else np.array(self.spec.std)
+
+        x_denorm = (x * std + mean).clip(0, 1)
+
+        # Convert CHW to HWC if needed
+        if len(x_denorm.shape) == 3 and x_denorm.shape[0] in (1, 3):
+            x_denorm = np.transpose(x_denorm, (1, 2, 0))
+            # Drop channel dim if grayscale
+            if x_denorm.shape[-1] == 1:
+                x_denorm = x_denorm.squeeze(-1)
+
+        return x_denorm
