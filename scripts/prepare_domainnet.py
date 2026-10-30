@@ -84,73 +84,92 @@ def extract_archive(archive_path: Path, raw_dir: Path) -> None:
 def find_image_root(raw_dir: Path) -> Path:
     """Return the directory that contains the class-level subdirectories.
 
-    The cleaned .zip and legacy .tar may extract with slightly different
-    top-level layouts.  This function probes one level deep to find the
-    directory that actually contains class folders.
+    The cleaned .zip and legacy .tar extract with different layouts:
+    - .zip: raw_dir/clipart/<class>/<image>
+    - .tar: raw_dir/clipart/<class>/<image> or raw_dir/<class>/<image>
+
+    This function finds the directory one level above the class folders.
     """
-    # Common case: raw_dir/clipart/<class>/
+    # Most likely: raw_dir/clipart/<class>/
     candidate = raw_dir / "clipart"
     if candidate.is_dir():
-        return candidate
-
-    # Some zip versions extract flat: raw_dir/<class>/
-    # Check whether raw_dir itself contains image files or only directories
-    subdirs = [d for d in raw_dir.iterdir() if d.is_dir()]
-    if subdirs:
-        # If every subdir looks like a class folder (contains images), we're done
-        sample = subdirs[0]
-        has_images = any(
+        # Verify it contains class folders with images
+        subdirs = [d for d in candidate.iterdir() if d.is_dir()]
+        if subdirs and any(
             f.suffix.lower() in {".jpg", ".jpeg", ".png"}
-            for f in sample.iterdir()
+            for d in subdirs
+            for f in d.iterdir()
             if f.is_file()
-        )
-        if has_images:
-            return raw_dir
+        ):
+            return candidate
 
-    # Fallback: return raw_dir and let organise_split handle it
+    # Fallback: raw_dir itself might be the root (tar extracts flat)
+    subdirs = [d for d in raw_dir.iterdir() if d.is_dir()]
+    if subdirs and any(
+        f.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        for d in subdirs
+        for f in d.iterdir()
+        if f.is_file()
+    ):
+        return raw_dir
+
+    # Last resort: return the most likely candidate
+    if (raw_dir / "clipart").is_dir():
+        return raw_dir / "clipart"
     return raw_dir
 
 
 def organise_split(
-    split_file: Path, raw_dir: Path, out_dir: Path,
+    split_file: Path, image_root: Path, out_dir: Path,
 ) -> int:
     """Copy images listed in *split_file* into ImageFolder layout under *out_dir*.
 
     Each line in the split file has the format ``<relative_path> <label_int>``.
-    The class name is taken from the first subdirectory in the relative path
-    (after stripping a leading ``clipart/`` domain prefix if present).
+    Paths in the split file are relative to the extraction root (e.g.,
+    ``clipart/aircraft_carrier/image.jpg``).
+
+    The image_root should be the directory containing the class folders
+    (e.g., after extraction, this is .../clipart_raw/clipart/).
 
     Returns the number of images copied.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     count = 0
     missing = 0
+
     with open(split_file) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
+
             parts = line.split()
             rel_path = parts[0]  # e.g. clipart/aircraft_carrier/sketch_0.jpg
             path_parts = Path(rel_path).parts
 
-            # Strip leading 'clipart/' domain prefix if present
+            # Extract class name (first subdirectory in the path)
             if path_parts[0] == "clipart":
                 class_name = path_parts[1]
+                # Remaining path after 'clipart/' (e.g., aircraft_carrier/sketch_0.jpg)
                 img_rel = Path(*path_parts[1:])
             else:
                 class_name = path_parts[0]
-                img_rel = Path(rel_path)
+                img_rel = Path(*path_parts[1:]) if len(path_parts) > 1 else Path(path_parts[0])
 
-            src = raw_dir / img_rel
+            # Try to find the image
+            # image_root is typically .../clipart, so look for class_name/image
+            src = image_root / img_rel
+
             if not src.exists():
-                # Try with the full path including 'clipart/' prefix
-                alt = raw_dir / rel_path
-                if alt.exists():
-                    src = alt
-                else:
-                    missing += 1
-                    continue
+                # Fallback: try with full path from split file
+                src = image_root / rel_path
+                if src.startswith(image_root / "clipart"):
+                    # Already includes clipart/, try without it
+                    src = image_root / img_rel
+
+            if not src.exists():
+                missing += 1
+                continue
 
             dst_dir = out_dir / class_name
             dst_dir.mkdir(parents=True, exist_ok=True)
