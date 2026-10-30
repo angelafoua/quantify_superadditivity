@@ -13,8 +13,7 @@ Usage
         --local_train_txt /path/to/clipart_train.txt \\
         --local_test_txt /path/to/clipart_test.txt
 
-The script supports both the recommended cleaned .zip (from the official site)
-and the legacy ICCV19 .tar archive. It detects the format automatically.
+The script downloads the recommended cleaned .zip from https://ai.bu.edu/DomainNet/.
 
 After completion, the directory layout is::
 
@@ -30,12 +29,10 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import tarfile
 import urllib.request
 import zipfile
 from pathlib import Path
 
-# Cleaned version (recommended) — https://ai.bu.edu/DomainNet/
 CLIPART_ZIP_URL = (
     "http://csr.bu.edu/ftp/visda/2019/multi-source/groundtruth/clipart.zip"
 )
@@ -45,9 +42,6 @@ TRAIN_SPLIT_URL = (
 TEST_SPLIT_URL = (
     "http://csr.bu.edu/ftp/visda/2019/multi-source/txt/clipart_test.txt"
 )
-
-# Legacy ICCV19 .tar (fallback if the .zip URL fails)
-CLIPART_TAR_URL = "http://csr.bu.edu/ftp/visda/2019/multi-source/clipart.tar"
 
 
 def download(url: str, dest: Path) -> None:
@@ -62,35 +56,27 @@ def download(url: str, dest: Path) -> None:
 
 
 def extract_archive(archive_path: Path, raw_dir: Path) -> None:
-    """Extract a .zip or .tar archive to *raw_dir*."""
+    """Extract the .zip archive to *raw_dir*."""
     raw_dir.mkdir(parents=True, exist_ok=True)
     suffix = archive_path.suffix.lower()
-    if suffix == ".zip":
-        print(f"  Extracting zip archive to {raw_dir} ...")
-        with zipfile.ZipFile(archive_path, "r") as zf:
-            zf.extractall(path=str(raw_dir))
-    elif suffix in (".tar", ".gz", ".tgz"):
-        print(f"  Extracting tar archive to {raw_dir} ...")
-        with tarfile.open(archive_path) as tar:
-            tar.extractall(path=str(raw_dir))
-    else:
+    if suffix != ".zip":
         raise ValueError(
-            f"Unsupported archive format: {archive_path.suffix}. "
-            "Expected .zip or .tar."
+            f"Expected .zip archive, got {archive_path.suffix}. "
+            f"Download clipart.zip from https://ai.bu.edu/DomainNet/"
         )
+    print(f"  Extracting zip archive to {raw_dir} ...")
+    with zipfile.ZipFile(archive_path, "r") as zf:
+        zf.extractall(path=str(raw_dir))
     print(f"  Extracted to {raw_dir}")
 
 
 def find_image_root(raw_dir: Path) -> Path:
     """Return the directory that contains the class-level subdirectories.
 
-    The cleaned .zip and legacy .tar extract with different layouts:
-    - .zip: raw_dir/clipart/<class>/<image>
-    - .tar: raw_dir/clipart/<class>/<image> or raw_dir/<class>/<image>
-
-    This function finds the directory one level above the class folders.
+    The .zip extracts as: raw_dir/clipart/<class>/<image>
+    This function returns the directory one level above the class folders.
     """
-    # Most likely: raw_dir/clipart/<class>/
+    # .zip layout: raw_dir/clipart/<class>/
     candidate = raw_dir / "clipart"
     if candidate.is_dir():
         # Verify it contains class folders with images
@@ -103,20 +89,11 @@ def find_image_root(raw_dir: Path) -> Path:
         ):
             return candidate
 
-    # Fallback: raw_dir itself might be the root (tar extracts flat)
-    subdirs = [d for d in raw_dir.iterdir() if d.is_dir()]
-    if subdirs and any(
-        f.suffix.lower() in {".jpg", ".jpeg", ".png"}
-        for d in subdirs
-        for f in d.iterdir()
-        if f.is_file()
-    ):
-        return raw_dir
-
-    # Last resort: return the most likely candidate
-    if (raw_dir / "clipart").is_dir():
-        return raw_dir / "clipart"
-    return raw_dir
+    raise FileNotFoundError(
+        f"Could not find image directory in {raw_dir}. "
+        f"Expected structure: {raw_dir}/clipart/<class>/<image>. "
+        f"Verify the archive extracted correctly."
+    )
 
 
 def organise_split(
@@ -202,7 +179,7 @@ def main() -> None:
     parser.add_argument(
         "--local_zip", type=str, default=None,
         help=(
-            "Path to a locally downloaded clipart.zip (or .tar) to use instead "
+            "Path to a locally downloaded clipart.zip to use instead "
             "of downloading. Skips the network download for the image archive."
         ),
     )
@@ -225,21 +202,13 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print("Step 1/3: Obtaining clipart archive and split files ...")
 
-    # Image archive (.zip preferred, .tar as fallback)
+    # Image archive (.zip from official site)
     if args.local_zip:
         archive_path = Path(args.local_zip)
         print(f"  Using local archive: {archive_path}")
     else:
         archive_path = download_dir / "clipart.zip"
-        try:
-            download(CLIPART_ZIP_URL, archive_path)
-        except Exception as exc:
-            print(
-                f"  Warning: failed to download cleaned .zip ({exc}).\n"
-                f"  Falling back to legacy .tar from {CLIPART_TAR_URL} ..."
-            )
-            archive_path = download_dir / "clipart.tar"
-            download(CLIPART_TAR_URL, archive_path)
+        download(CLIPART_ZIP_URL, archive_path)
 
     # Train / test split files
     if args.local_train_txt:
