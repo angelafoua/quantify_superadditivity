@@ -102,15 +102,27 @@ def organise_split(
     """Copy images listed in *split_file* into ImageFolder layout under *out_dir*.
 
     Each line in the split file has the format ``<relative_path> <label_int>``.
-    Paths in the split file are relative to the extraction root (e.g.,
-    ``clipart/aircraft_carrier/image.jpg``).
+    Paths in the split file are relative to the extraction root, e.g.
+    ``clipart/aircraft_carrier/image.jpg``.
 
-    The image_root should be the directory containing the class folders
-    (e.g., after extraction, this is .../clipart_raw/clipart/).
+    The function builds a ``(class_name, filename)`` index from the actual
+    files under *image_root* and matches split-file entries against that
+    index, so it is robust to any leading path components in the split file
+    that differ from the extracted layout.
 
     Returns the number of images copied.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build a lookup: (class_name, filename) -> full Path
+    index: dict[tuple[str, str], Path] = {}
+    for class_dir in image_root.iterdir():
+        if not class_dir.is_dir():
+            continue
+        for img_file in class_dir.iterdir():
+            if img_file.suffix.lower() in {".jpg", ".jpeg", ".png"}:
+                index[(class_dir.name, img_file.name)] = img_file
+
     count = 0
     missing = 0
 
@@ -120,37 +132,29 @@ def organise_split(
             if not line:
                 continue
 
-            parts = line.split()
-            rel_path = parts[0]  # e.g. clipart/aircraft_carrier/sketch_0.jpg
+            rel_path = line.split()[0]  # e.g. clipart/aircraft_carrier/sketch_0.jpg
             path_parts = Path(rel_path).parts
 
-            # Extract class name (first subdirectory in the path)
-            if path_parts[0] == "clipart":
+            # Resolve class_name and filename regardless of leading path components.
+            # Split files may prefix paths with 'clipart/' or omit it entirely.
+            if len(path_parts) < 2:
+                missing += 1
+                continue
+            if path_parts[0] == "clipart" and len(path_parts) >= 3:
                 class_name = path_parts[1]
-                # Remaining path after 'clipart/' (e.g., aircraft_carrier/sketch_0.jpg)
-                img_rel = Path(*path_parts[1:])
+                filename = path_parts[2]
             else:
-                class_name = path_parts[0]
-                img_rel = Path(*path_parts[1:]) if len(path_parts) > 1 else Path(path_parts[0])
+                class_name = path_parts[-2]
+                filename = path_parts[-1]
 
-            # Try to find the image
-            # image_root is typically .../clipart, so look for class_name/image
-            src = image_root / img_rel
-
-            if not src.exists():
-                # Fallback: try with full path from split file
-                src = image_root / rel_path
-                if src.startswith(image_root / "clipart"):
-                    # Already includes clipart/, try without it
-                    src = image_root / img_rel
-
-            if not src.exists():
+            src = index.get((class_name, filename))
+            if src is None:
                 missing += 1
                 continue
 
             dst_dir = out_dir / class_name
             dst_dir.mkdir(parents=True, exist_ok=True)
-            dst = dst_dir / src.name
+            dst = dst_dir / filename
             if not dst.exists():
                 shutil.copy2(str(src), str(dst))
             count += 1
