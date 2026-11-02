@@ -4,6 +4,7 @@ Usage:
     python scripts/run_sweep.py --experiment core_factorial
     python scripts/run_sweep.py --experiment extended_grid
     python scripts/run_sweep.py --experiment pout_sweep
+    python scripts/run_sweep.py --experiment pout_sweep_domainnet --resume
 """
 
 from __future__ import annotations
@@ -23,19 +24,49 @@ from superadditivity.utils.io import load_json, save_json, ensure_dir
 logger = logging.getLogger(__name__)
 
 
-def _is_complete(run_cfg: "DictConfig") -> bool:
-    """Return True if this run already finished (its summary.json exists).
-
-    A run writes ``summary.json`` only after it completes, so its presence is a
-    reliable "done" marker. This lets a sweep resume after an interrupted
-    session (e.g. a free-tier GPU disconnect) without repeating finished runs.
-    """
-    summary = (
+def _run_dir(run_cfg: "DictConfig") -> Path:
+    """Return the run-specific output directory for a config."""
+    return (
         Path(run_cfg.output_dir)
         / f"seed_{run_cfg.run_seed}_graph_{run_cfg.graph_seed}"
-        / "summary.json"
     )
-    return summary.exists()
+
+
+def _is_complete(run_cfg: "DictConfig") -> bool:
+    """Return True if this run already finished (its summary.json exists and is valid).
+
+    A run writes ``summary.json`` atomically only after it completes, so its
+    presence is a reliable "done" marker.
+    """
+    summary = _run_dir(run_cfg) / "summary.json"
+    if not summary.exists():
+        return False
+    try:
+        data = load_json(summary)
+        # Sanity: must have the expected experiment name and round count.
+        return (
+            isinstance(data, dict)
+            and data.get("total_rounds") == run_cfg.training.total_rounds
+        )
+    except Exception:
+        return False
+
+
+def _has_resume_checkpoint(run_cfg: "DictConfig") -> bool:
+    """Return True if the run directory contains a resume checkpoint."""
+    resume_dir = _run_dir(run_cfg) / "resume_checkpoints"
+    if not resume_dir.is_dir():
+        return False
+    return any(resume_dir.glob("resume_ckpt_r*.pt"))
+
+
+def _run_status(run_cfg: "DictConfig") -> str:
+    """Classify a run as 'complete', 'interrupted', or 'new'."""
+    if _is_complete(run_cfg):
+        return "complete"
+    if _has_resume_checkpoint(run_cfg):
+        return "interrupted"
+    return "new"
 
 
 def run_core_factorial(cfg: dict, resume: bool = False) -> None:
@@ -60,9 +91,14 @@ def run_core_factorial(cfg: dict, resume: bool = False) -> None:
                     f"experiment_name={cfg['experiment_name']}_{cell_name}",
                 ]
                 run_cfg = _build_config(overrides)
-                if resume and _is_complete(run_cfg):
-                    logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                status = _run_status(run_cfg) if resume else "new"
+                if status == "complete":
+                    logger.info("SKIP (complete): %s", _run_dir(run_cfg))
                     continue
+                if status == "interrupted":
+                    logger.info("RESUME (from checkpoint): %s", _run_dir(run_cfg))
+                else:
+                    logger.info("START (new): %s", _run_dir(run_cfg))
                 try:
                     run(run_cfg)
                 except Exception as e:
@@ -91,9 +127,14 @@ def run_extended_grid(cfg: dict, resume: bool = False) -> None:
                         f"experiment_name={cfg['experiment_name']}_{data_level}_{network_level}",
                     ]
                     run_cfg = _build_config(overrides)
-                    if resume and _is_complete(run_cfg):
-                        logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                    status = _run_status(run_cfg) if resume else "new"
+                    if status == "complete":
+                        logger.info("SKIP (complete): %s", _run_dir(run_cfg))
                         continue
+                    if status == "interrupted":
+                        logger.info("RESUME (from checkpoint): %s", _run_dir(run_cfg))
+                    else:
+                        logger.info("START (new): %s", _run_dir(run_cfg))
                     try:
                         run(run_cfg)
                     except Exception as e:
@@ -104,14 +145,18 @@ def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
     """Run parametric p_out sweep."""
     from scripts.run_experiment import run
 
+    total = (
+        len(cfg["data_levels"]) * len(cfg["p_out_values"])
+        * len(cfg["run_seeds"]) * len(cfg["graph_seeds"])
+    )
+    done = 0
+    skipped = 0
+    resumed = 0
+
     for data_level in cfg["data_levels"]:
         for p_out in cfg["p_out_values"]:
             for run_seed in cfg["run_seeds"]:
                 for graph_seed in cfg["graph_seeds"]:
-                    logger.info(
-                        "Running data=%s, p_out=%.3f, rs=%d, gs=%d",
-                        data_level, p_out, run_seed, graph_seed,
-                    )
                     overrides = [
                         f"data={data_level}",
                         "graph=sbm_medium",
@@ -124,13 +169,44 @@ def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
                         f"experiment_name={cfg['experiment_name']}_pout{p_out}_{data_level}",
                     ]
                     run_cfg = _build_config(overrides)
-                    if resume and _is_complete(run_cfg):
-                        logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                    status = _run_status(run_cfg) if resume else "new"
+
+                    label = (
+                        f"data={data_level}, p_out={p_out:.3f}, "
+                        f"rs={run_seed}, gs={graph_seed}"
+                    )
+
+                    if status == "complete":
+                        skipped += 1
+                        logger.info(
+                            "[%d/%d] SKIP (complete): %s",
+                            skipped + done, total, label,
+                        )
                         continue
+
+                    if status == "interrupted":
+                        resumed += 1
+                        logger.info(
+                            "[%d/%d] RESUME (from checkpoint): %s",
+                            skipped + done + 1, total, label,
+                        )
+                    else:
+                        logger.info(
+                            "[%d/%d] START (new): %s",
+                            skipped + done + 1, total, label,
+                        )
+
                     try:
                         run(run_cfg)
+                        done += 1
                     except Exception as e:
-                        logger.error("Failed: %s", e)
+                        logger.error("Failed: %s (%s)", e, label)
+                        done += 1
+
+    logger.info(
+        "Sweep progress: %d skipped, %d resumed, %d total runs of %d",
+        skipped, resumed, skipped + done, total,
+    )
 
 
 def _build_config(overrides: list) -> "DictConfig":
@@ -156,7 +232,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--resume", action="store_true",
-        help="Skip runs that already have a summary.json (resume an interrupted sweep).",
+        help="Skip completed runs and resume interrupted ones from checkpoint.",
     )
     args = parser.parse_args()
 
@@ -193,9 +269,14 @@ def main() -> None:
                                 f"experiment_name=robustness_{check_name}",
                             ]
                             run_cfg = _build_config(overrides)
-                            if args.resume and _is_complete(run_cfg):
-                                logger.info("Skipping completed run (resume): %s", run_cfg.output_dir)
+                            status = _run_status(run_cfg) if args.resume else "new"
+                            if status == "complete":
+                                logger.info("SKIP (complete): %s", _run_dir(run_cfg))
                                 continue
+                            if status == "interrupted":
+                                logger.info("RESUME (from checkpoint): %s", _run_dir(run_cfg))
+                            else:
+                                logger.info("START (new): %s", _run_dir(run_cfg))
                             try:
                                 from scripts.run_experiment import run
                                 run(run_cfg)

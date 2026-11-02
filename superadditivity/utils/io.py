@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -24,11 +25,19 @@ def ensure_dir(path: PathLike) -> Path:
 
 
 def save_json(obj: Any, path: PathLike, indent: int = 2) -> None:
-    """Serialise ``obj`` to JSON at ``path``."""
+    """Serialise ``obj`` to JSON at ``path`` atomically.
+
+    Writes to a temporary file first and renames it into place so that a
+    crash mid-write never leaves a corrupt or truncated target file.
+    """
     p = Path(path)
     ensure_dir(p.parent)
-    with p.open("w", encoding="utf-8") as fh:
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
         json.dump(obj, fh, indent=indent, default=_json_default)
+        fh.flush()
+        os.fsync(fh.fileno())
+    tmp.replace(p)
     logger.debug("Wrote JSON to %s", p)
 
 

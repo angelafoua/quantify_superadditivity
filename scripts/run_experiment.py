@@ -51,7 +51,10 @@ from superadditivity.evaluation.centroid_analyzer import CentroidAnalyzer
 from superadditivity.evaluation.drift_tracker import DriftTracker
 from superadditivity.logging.csv_logger import CSVLogger
 from superadditivity.logging.metadata_store import MetadataStore
-from superadditivity.logging.checkpoint_manager import CheckpointManager
+from superadditivity.logging.checkpoint_manager import (
+    CheckpointManager,
+    TrainingCheckpointManager,
+)
 from superadditivity.utils.seed import set_all_seeds, derived_seed, PROBE_SEED, seed_worker
 from superadditivity.utils.device import select_device
 from superadditivity.utils.io import ensure_dir, save_json
@@ -132,7 +135,11 @@ def _build_client_id_to_community(
 
 
 def run(cfg: DictConfig) -> dict:
-    """Execute a single experiment run."""
+    """Execute a single experiment run.
+
+    If a resume checkpoint exists and is compatible with the current config,
+    training resumes from the saved round instead of restarting.
+    """
     t_start = time.time()
     run_seed = cfg.run_seed
     graph_seed = cfg.graph_seed
@@ -308,46 +315,40 @@ def run(cfg: DictConfig) -> dict:
         community_assignments=community_arr,
     )
 
+    # ---- Resume manager ----
+    config_dict = OmegaConf.to_container(cfg, resolve=True)
+    resume_mgr = TrainingCheckpointManager(
+        output_dir=str(output_dir / "resume_checkpoints"),
+        config_dict=config_dict,
+    )
+
     metadata = MetadataStore(str(output_dir / "metadata.json"))
     metadata.collect(run_seed=run_seed, graph_seed=graph_seed,
-                     config=OmegaConf.to_container(cfg, resolve=True))
+                     config=config_dict)
     metadata.save()
 
     # ---- Coordinator ----
     algorithm = cfg.training.get("algorithm", "dsgd")
+    coordinator_kwargs = dict(
+        clients=clients, lr_schedule=lr_schedule,
+        total_rounds=cfg.training.total_rounds,
+        eval_every=cfg.training.eval_every,
+        checkpoint_every=cfg.training.checkpoint_every,
+        output_dir=str(output_dir),
+        evaluator=evaluator,
+        loggers=[csv_logger],
+        checkpoint_manager=checkpoint_mgr,
+        resume_manager=resume_mgr,
+        drift_tracker=drift_tracker,
+    )
+
     if algorithm == "fedavg":
-        coordinator = FedAvgCoordinator(
-            clients=clients, lr_schedule=lr_schedule,
-            total_rounds=cfg.training.total_rounds,
-            eval_every=cfg.training.eval_every,
-            checkpoint_every=cfg.training.checkpoint_every,
-            output_dir=str(output_dir),
-            evaluator=evaluator,
-            loggers=[csv_logger],
-            checkpoint_manager=checkpoint_mgr,
-        )
+        coordinator = FedAvgCoordinator(**coordinator_kwargs)
     elif algorithm == "local_only":
-        coordinator = LocalOnlyCoordinator(
-            clients=clients, lr_schedule=lr_schedule,
-            total_rounds=cfg.training.total_rounds,
-            eval_every=cfg.training.eval_every,
-            checkpoint_every=cfg.training.checkpoint_every,
-            output_dir=str(output_dir),
-            evaluator=evaluator,
-            loggers=[csv_logger],
-            checkpoint_manager=checkpoint_mgr,
-        )
+        coordinator = LocalOnlyCoordinator(**coordinator_kwargs)
     else:
         coordinator = DSGDCoordinator(
-            clients=clients, mixing_matrix=W,
-            lr_schedule=lr_schedule,
-            total_rounds=cfg.training.total_rounds,
-            eval_every=cfg.training.eval_every,
-            checkpoint_every=cfg.training.checkpoint_every,
-            output_dir=str(output_dir),
-            evaluator=evaluator,
-            loggers=[csv_logger],
-            checkpoint_manager=checkpoint_mgr,
+            mixing_matrix=W, **coordinator_kwargs,
         )
 
     history = coordinator.run()

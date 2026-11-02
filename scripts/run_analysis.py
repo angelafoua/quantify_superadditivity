@@ -3,11 +3,13 @@
 Usage:
     python scripts/run_analysis.py --results_dir outputs/core_factorial
     python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surface
+    python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surface --force
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import sys
 from pathlib import Path
@@ -21,9 +23,34 @@ from superadditivity.analysis.interaction_analyzer import InteractionAnalyzer
 from superadditivity.analysis.mixed_effects import fit_mixed_effects
 from superadditivity.analysis.multiple_comparisons import pairwise_ttests
 from superadditivity.analysis.statistical_report import StatisticalReport
-from superadditivity.utils.io import ensure_dir, save_json
+from superadditivity.utils.io import ensure_dir, save_json, load_json
 
 logger = logging.getLogger(__name__)
+
+
+def _summaries_fingerprint(results_dir: str) -> str:
+    """Hash all summary.json files in the results tree for change detection."""
+    md5 = hashlib.md5()
+    for p in sorted(Path(results_dir).rglob("summary.json")):
+        md5.update(p.read_bytes())
+    return md5.hexdigest()
+
+
+def _is_analysis_current(output_dir: str, results_dir: str) -> bool:
+    """Return True if analysis output was produced from the current summaries."""
+    stamp = Path(output_dir) / ".analysis_fingerprint"
+    if not stamp.exists():
+        return False
+    try:
+        saved = stamp.read_text().strip()
+        return saved == _summaries_fingerprint(results_dir)
+    except Exception:
+        return False
+
+
+def _write_fingerprint(output_dir: str, results_dir: str) -> None:
+    stamp = Path(output_dir) / ".analysis_fingerprint"
+    stamp.write_text(_summaries_fingerprint(results_dir))
 
 
 def run_factorial_analysis(results_dir: str, output_dir: str) -> None:
@@ -84,6 +111,7 @@ def run_factorial_analysis(results_dir: str, output_dir: str) -> None:
     report.add_section("Mixed-Effects Model", me_result["summary"])
 
     report.save()
+    _write_fingerprint(output_dir, results_dir)
     logger.info("Analysis complete. Report: %s", report.output_path)
 
 
@@ -123,6 +151,7 @@ def run_surface_analysis(results_dir: str, output_dir: str) -> None:
     report.add_surface_fit_results(surface_fit)
     report.save()
 
+    _write_fingerprint(output_dir, results_dir)
     logger.info("Surface analysis complete. Output: %s", output_dir)
 
 
@@ -136,9 +165,20 @@ def main() -> None:
     parser.add_argument("--results_dir", required=True, help="Directory with experiment outputs")
     parser.add_argument("--output_dir", default=None, help="Output directory (default: results_dir/analysis)")
     parser.add_argument("--analysis", default="factorial", choices=["factorial", "surface", "both"])
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Rerun analysis even if results haven't changed since last run.",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir or str(Path(args.results_dir) / "analysis")
+
+    if not args.force and _is_analysis_current(output_dir, args.results_dir):
+        logger.info(
+            "Analysis is up to date (summaries unchanged). "
+            "Use --force to regenerate."
+        )
+        return
 
     if args.analysis in ("factorial", "both"):
         run_factorial_analysis(args.results_dir, output_dir)

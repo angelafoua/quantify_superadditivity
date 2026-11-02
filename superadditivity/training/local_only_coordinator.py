@@ -40,6 +40,10 @@ class LocalOnlyCoordinator(DSGDCoordinator):
         Optional list of loggers.
     checkpoint_manager:
         Optional checkpoint manager.
+    resume_manager:
+        Optional :class:`TrainingCheckpointManager` for mid-run resume.
+    drift_tracker:
+        Optional :class:`DriftTracker` for resume state.
     """
 
     def __init__(
@@ -53,6 +57,8 @@ class LocalOnlyCoordinator(DSGDCoordinator):
         evaluator: Any = None,
         loggers: Optional[list] = None,
         checkpoint_manager: Any = None,
+        resume_manager: Any = None,
+        drift_tracker: Any = None,
     ) -> None:
         n = len(clients)
         W = np.eye(n, dtype=np.float64)
@@ -67,5 +73,7 @@ class LocalOnlyCoordinator(DSGDCoordinator):
             evaluator=evaluator,
             loggers=loggers,
             checkpoint_manager=checkpoint_manager,
+            resume_manager=resume_manager,
+            drift_tracker=drift_tracker,
         )
         logger.info("Local-only coordinator: identity W (%d×%d)", n, n)
