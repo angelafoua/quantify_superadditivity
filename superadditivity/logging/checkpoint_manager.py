@@ -176,6 +176,18 @@ class TrainingCheckpointManager:
                 "optimizer": c.optimizer.state_dict(),
             })
 
+        # Save per-client DataLoader generator state for exact data-order
+        # reproducibility across resume.  The generator may not exist if the
+        # client's loader has not been initialised yet (first checkpoint
+        # before any local_step).
+        dl_gen_states = []
+        for c in clients:
+            loader = getattr(c, "_loader", None)
+            if loader is not None and hasattr(loader, "generator") and loader.generator is not None:
+                dl_gen_states.append(loader.generator.get_state())
+            else:
+                dl_gen_states.append(None)
+
         payload = {
             "round_num": round_num,
             "config_hash": self._config_hash,
@@ -185,6 +197,7 @@ class TrainingCheckpointManager:
             "rng_python": random.getstate(),
             "rng_numpy": np.random.get_state(),
             "rng_torch_cpu": torch.random.get_rng_state(),
+            "dataloader_generator_states": dl_gen_states,
         }
         if torch.cuda.is_available():
             payload["rng_torch_cuda"] = [
@@ -208,20 +221,67 @@ class TrainingCheckpointManager:
     # ------------------------------------------------------------------
 
     def find_latest(self) -> Optional[Path]:
-        """Return the path of the newest valid resume checkpoint, or None."""
+        """Return the path of the newest valid, config-compatible checkpoint.
+
+        Iterates from newest to oldest.  Corrupt files are skipped (with a
+        warning).  The **first** structurally valid checkpoint is tested for
+        config compatibility; if it mismatches, a ``RuntimeError`` is raised
+        immediately — older checkpoints are **not** tried because all
+        checkpoints within a single run share the same config hash, so a
+        mismatch means the *config* changed, not the checkpoint.
+
+        If corrupt checkpoints are skipped and an older valid one is found,
+        a warning notes the progress that will be replayed.
+        """
         candidates = sorted(
             self.output_dir.glob(f"{self.FILENAME_PREFIX}_r*.pt"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
+        skipped_corrupt: List[Path] = []
         for path in candidates:
             try:
                 ckpt = torch.load(path, map_location="cpu", weights_only=False)
-                if "round_num" in ckpt and "client_states" in ckpt:
-                    return path
+                if "round_num" not in ckpt or "client_states" not in ckpt:
+                    skipped_corrupt.append(path)
+                    logger.warning(
+                        "Skipping structurally invalid checkpoint: %s", path,
+                    )
+                    continue
+                # Config compatibility — fail fast, don't fall through.
+                saved_hash = ckpt.get("config_hash", "")
+                if (
+                    self._config_hash
+                    and saved_hash
+                    and saved_hash != self._config_hash
+                ):
+                    raise RuntimeError(
+                        f"Configuration changed since checkpoint was saved "
+                        f"(saved hash={saved_hash}, current hash="
+                        f"{self._config_hash}). Delete the checkpoint "
+                        f"directory to start fresh, or restore the original "
+                        f"configuration."
+                    )
+                if skipped_corrupt:
+                    logger.warning(
+                        "Falling back to older checkpoint %s (skipped %d "
+                        "corrupt: %s). Rounds %d+ will be replayed.",
+                        path.name,
+                        len(skipped_corrupt),
+                        [p.name for p in skipped_corrupt],
+                        ckpt["round_num"] + 1,
+                    )
+                return path
+            except RuntimeError:
+                raise  # config mismatch — propagate
             except Exception as exc:
+                skipped_corrupt.append(path)
                 logger.warning("Skipping corrupt checkpoint %s: %s", path, exc)
         return None
+
+    def has_any_checkpoint_files(self) -> bool:
+        """Return True if the checkpoint directory contains any ``.pt`` files."""
+        return any(self.output_dir.glob(f"{self.FILENAME_PREFIX}_r*.pt"))
 
     def load_training_state(
         self,

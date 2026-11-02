@@ -36,16 +36,35 @@ def _summaries_fingerprint(results_dir: str) -> str:
     return md5.hexdigest()
 
 
+_EXPECTED_ANALYSIS_FILES = [
+    "statistical_report.md",
+    "interaction_test.json",
+]
+
+
 def _is_analysis_current(output_dir: str, results_dir: str) -> bool:
-    """Return True if analysis output was produced from the current summaries."""
-    stamp = Path(output_dir) / ".analysis_fingerprint"
+    """Return True if analysis output was produced from the current summaries.
+
+    Also checks that expected output files still exist — a matching
+    fingerprint alone is not enough if outputs were deleted.
+    """
+    out = Path(output_dir)
+    stamp = out / ".analysis_fingerprint"
     if not stamp.exists():
         return False
     try:
         saved = stamp.read_text().strip()
-        return saved == _summaries_fingerprint(results_dir)
+        if saved != _summaries_fingerprint(results_dir):
+            return False
     except Exception:
         return False
+    if not any((out / f).exists() for f in _EXPECTED_ANALYSIS_FILES):
+        logger.info(
+            "Fingerprint matches but no analysis outputs found in %s. "
+            "Regenerating.", output_dir,
+        )
+        return False
+    return True
 
 
 def _write_fingerprint(output_dir: str, results_dir: str) -> None:

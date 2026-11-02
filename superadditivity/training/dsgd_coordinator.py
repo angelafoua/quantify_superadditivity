@@ -15,6 +15,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+import csv
+
 from superadditivity.communication.gossip_mixer import GossipMixer
 from superadditivity.training.decentralized_client import DecentralizedClient
 from superadditivity.training.lr_schedule import CosineDecaySchedule
@@ -87,20 +89,42 @@ class DSGDCoordinator:
         self.drift_tracker = drift_tracker
 
     def run(self) -> Dict[str, Any]:
-        """Execute the full D-SGD training loop, resuming if a checkpoint exists."""
+        """Execute the full D-SGD training loop, resuming if a checkpoint exists.
+
+        Raises
+        ------
+        RuntimeError
+            If checkpoint files exist but none are usable (all corrupt),
+            indicating a prior run that cannot be resumed.  Delete the run
+            directory to start fresh.
+        """
         start_round = 0
         history: Dict[str, list] = {"round": [], "lr": [], "mean_loss": [], "wall_time": []}
 
         # ---- Attempt resume ----
         if self.resume_manager is not None:
-            latest = self.resume_manager.find_latest()
+            latest = self.resume_manager.find_latest()  # may raise on config mismatch
             if latest is not None:
                 try:
                     ckpt = self.resume_manager.load_training_state(latest)
                     self.resume_manager.restore_clients(self.clients, ckpt)
                     self.resume_manager.restore_rng(ckpt)
+
+                    # Restore per-client DataLoader generator states so that
+                    # the data shuffle order matches uninterrupted training.
+                    dl_states = ckpt.get("dataloader_generator_states", [])
+                    for i, c in enumerate(self.clients):
+                        if i < len(dl_states) and dl_states[i] is not None:
+                            c._get_loader()  # ensure the DataLoader exists
+                            c._loader.generator.set_state(dl_states[i])
+
                     history = ckpt.get("history", history)
                     start_round = ckpt["round_num"] + 1
+
+                    # Truncate CSV log to the checkpoint round so that
+                    # rounds after the checkpoint are not duplicated.
+                    self._truncate_csv_to_round(ckpt["round_num"])
+
                     if self.drift_tracker is not None and "drift_tracker_state" in ckpt:
                         self.drift_tracker.load_state(ckpt["drift_tracker_state"])
                     logger.info(
@@ -110,6 +134,13 @@ class DSGDCoordinator:
                 except RuntimeError as exc:
                     logger.error("Cannot resume: %s", exc)
                     raise
+            elif self.resume_manager.has_any_checkpoint_files():
+                raise RuntimeError(
+                    f"Previous training found in "
+                    f"{self.resume_manager.output_dir} but all checkpoints "
+                    f"are corrupt. To restart from scratch, delete the run "
+                    f"directory. To preserve existing artifacts, rename it."
+                )
 
         if start_round >= self.total_rounds:
             logger.info(
@@ -187,3 +218,36 @@ class DSGDCoordinator:
 
         logger.info("D-SGD complete. Total wall time: %.1fs", time.time() - t0)
         return history
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _truncate_csv_to_round(self, max_round: int) -> None:
+        """Remove CSV rows with ``round`` > *max_round* to avoid duplicates on resume."""
+        if self.output_dir is None:
+            return
+        csv_path = self.output_dir / "metrics.csv"
+        if not csv_path.exists():
+            return
+        try:
+            with csv_path.open("r", newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                fieldnames = reader.fieldnames
+                if not fieldnames:
+                    return
+                kept = [
+                    row for row in reader
+                    if "round" not in row or int(row["round"]) <= max_round
+                ]
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                for row in kept:
+                    writer.writerow(row)
+            logger.info(
+                "Truncated metrics.csv to round ≤%d (%d rows kept)",
+                max_round, len(kept),
+            )
+        except Exception as exc:
+            logger.warning("Could not truncate metrics.csv: %s", exc)

@@ -54,6 +54,7 @@ from superadditivity.logging.metadata_store import MetadataStore
 from superadditivity.logging.checkpoint_manager import (
     CheckpointManager,
     TrainingCheckpointManager,
+    _config_hash,
 )
 from superadditivity.utils.seed import set_all_seeds, derived_seed, PROBE_SEED, seed_worker
 from superadditivity.utils.device import select_device
@@ -371,6 +372,7 @@ def run(cfg: DictConfig) -> dict:
 
     summary = {
         "experiment_name": cfg.experiment_name,
+        "config_hash": _config_hash(config_dict),
         "run_seed": run_seed,
         "graph_seed": graph_seed,
         "data_regime": cfg.data.partition_method,

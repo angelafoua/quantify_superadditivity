@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from omegaconf import OmegaConf
 
+from superadditivity.logging.checkpoint_manager import _config_hash
 from superadditivity.utils.io import load_json, save_json, ensure_dir
 
 logger = logging.getLogger(__name__)
@@ -33,21 +34,45 @@ def _run_dir(run_cfg: "DictConfig") -> Path:
 
 
 def _is_complete(run_cfg: "DictConfig") -> bool:
-    """Return True if this run already finished (its summary.json exists and is valid).
+    """Return True if this run already finished with a compatible config.
 
-    A run writes ``summary.json`` atomically only after it completes, so its
-    presence is a reliable "done" marker.
+    Validates that ``summary.json`` exists, is parseable, and its config hash
+    and ``total_rounds`` match the current configuration.  Also checks that
+    ``drift_metrics.h5`` was written (guards against interrupted final saves).
     """
-    summary = _run_dir(run_cfg) / "summary.json"
+    run_dir = _run_dir(run_cfg)
+    summary = run_dir / "summary.json"
     if not summary.exists():
         return False
     try:
         data = load_json(summary)
-        # Sanity: must have the expected experiment name and round count.
-        return (
-            isinstance(data, dict)
-            and data.get("total_rounds") == run_cfg.training.total_rounds
-        )
+        if not isinstance(data, dict):
+            return False
+        if data.get("total_rounds") != run_cfg.training.total_rounds:
+            return False
+        # Validate config identity if the summary carries a hash.
+        saved_hash = data.get("config_hash")
+        if saved_hash:
+            current_hash = _config_hash(
+                OmegaConf.to_container(run_cfg, resolve=True)
+            )
+            if saved_hash != current_hash:
+                logger.warning(
+                    "Summary config hash mismatch in %s "
+                    "(saved=%s, current=%s). Re-running.",
+                    run_dir, saved_hash, current_hash,
+                )
+                return False
+        # Check that drift_metrics.h5 was written (interrupted final
+        # write could leave summary.json present but HDF5 missing).
+        if not (run_dir / "drift_metrics.h5").exists():
+            logger.warning(
+                "summary.json exists but drift_metrics.h5 is missing in %s. "
+                "Treating as incomplete.",
+                run_dir,
+            )
+            return False
+        return True
     except Exception:
         return False
 

@@ -42,14 +42,29 @@ def _results_fingerprint(results_dir: Path) -> str:
     return md5.hexdigest()
 
 
+_EXPECTED_FIGURE_FILES = [
+    "factorial_grid.pdf",
+    "drift_trajectories.pdf",
+]
+
+
 def _is_viz_current(fig_dir: Path, results_dir: Path) -> bool:
+    """Return True if figures are up to date and at least one output exists."""
     stamp = fig_dir / ".viz_fingerprint"
     if not stamp.exists():
         return False
     try:
-        return stamp.read_text().strip() == _results_fingerprint(results_dir)
+        if stamp.read_text().strip() != _results_fingerprint(results_dir):
+            return False
     except Exception:
         return False
+    if not any((fig_dir / f).exists() for f in _EXPECTED_FIGURE_FILES):
+        logger.info(
+            "Fingerprint matches but no figure files found in %s. "
+            "Regenerating.", fig_dir,
+        )
+        return False
+    return True
 
 
 def _write_viz_fingerprint(fig_dir: Path, results_dir: Path) -> None:
