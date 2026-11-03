@@ -1,6 +1,7 @@
 """D-SGD coordinator: the main training loop.
 
 Each round: LR schedule → local SGD → gossip mixing → eval → checkpoint → log.
+Supports mid-run resume from a :class:`TrainingCheckpointManager` checkpoint.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 import torch.nn as nn
+
+import csv
 
 from superadditivity.communication.gossip_mixer import GossipMixer
 from superadditivity.training.decentralized_client import DecentralizedClient
@@ -45,7 +48,12 @@ class DSGDCoordinator:
     loggers:
         Optional list of logger objects (CSV, W&B).
     checkpoint_manager:
-        Optional checkpoint manager.
+        Optional checkpoint manager (community-averaged snapshots).
+    resume_manager:
+        Optional :class:`TrainingCheckpointManager` for mid-run resume.
+    drift_tracker:
+        Optional :class:`DriftTracker` whose state is saved in resume
+        checkpoints so that drift metrics survive a restart.
     """
 
     def __init__(
@@ -60,6 +68,8 @@ class DSGDCoordinator:
         evaluator: Any = None,
         loggers: Optional[list] = None,
         checkpoint_manager: Any = None,
+        resume_manager: Any = None,
+        drift_tracker: Any = None,
     ) -> None:
         self.clients = clients
         self.n_clients = len(clients)
@@ -75,16 +85,62 @@ class DSGDCoordinator:
         self.evaluator = evaluator
         self.loggers = loggers or []
         self.checkpoint_manager = checkpoint_manager
+        self.resume_manager = resume_manager
+        self.drift_tracker = drift_tracker
 
     def run(self) -> Dict[str, Any]:
-        """Execute the full D-SGD training loop."""
-        logger.info(
-            "Starting D-SGD: %d clients, %d rounds", self.n_clients, self.total_rounds
-        )
+        """Execute the full D-SGD training loop, resuming if a checkpoint exists.
+
+        Raises
+        ------
+        RuntimeError
+            If checkpoint loading fails for any reason (corrupt, missing
+            fields, config mismatch, client count mismatch).  The error
+            message includes the checkpoint path and a concrete next step.
+        """
+        start_round = 0
         history: Dict[str, list] = {"round": [], "lr": [], "mean_loss": [], "wall_time": []}
+
+        # ---- Attempt resume (strict fail-fast) ----
+        if self.resume_manager is not None:
+            latest = self.resume_manager.find_latest()  # raises on corrupt/invalid/mismatch
+            if latest is not None:
+                ckpt = self.resume_manager.load_training_state(latest)
+                self.resume_manager.restore_clients(self.clients, ckpt)
+                self.resume_manager.restore_rng(ckpt)
+
+                dl_states = ckpt.get("dataloader_generator_states", [])
+                for i, c in enumerate(self.clients):
+                    if i < len(dl_states) and dl_states[i] is not None:
+                        c._get_loader()
+                        c._loader.generator.set_state(dl_states[i])
+
+                history = ckpt.get("history", history)
+                start_round = ckpt["round_num"] + 1
+
+                self._truncate_csv_to_round(ckpt["round_num"])
+
+                if self.drift_tracker is not None and "drift_tracker_state" in ckpt:
+                    self.drift_tracker.load_state(ckpt["drift_tracker_state"])
+                logger.info(
+                    "Resumed from round %d (checkpoint %s)",
+                    ckpt["round_num"], latest.name,
+                )
+
+        if start_round >= self.total_rounds:
+            logger.info(
+                "Training already complete (checkpoint at round %d, total %d). Skipping.",
+                start_round - 1, self.total_rounds,
+            )
+            return history
+
+        logger.info(
+            "Starting D-SGD: %d clients, rounds %d–%d (of %d total)",
+            self.n_clients, start_round, self.total_rounds - 1, self.total_rounds,
+        )
         t0 = time.time()
 
-        for round_num in range(self.total_rounds):
+        for round_num in range(start_round, self.total_rounds):
             lr = self.lr_schedule.get_lr(round_num)
 
             for client in self.clients:
@@ -130,5 +186,53 @@ class DSGDCoordinator:
                 state_dicts_cp = [c.get_state_dict() for c in self.clients]
                 self.checkpoint_manager.save(state_dicts_cp, round_num)
 
+            # Save resume checkpoint at the same cadence as community checkpoints
+            if self.resume_manager and (
+                round_num % self.checkpoint_every == 0
+                or round_num == self.total_rounds - 1
+            ):
+                dt_state = (
+                    self.drift_tracker.get_state()
+                    if self.drift_tracker is not None
+                    else None
+                )
+                self.resume_manager.save_training_state(
+                    self.clients, round_num, history,
+                    drift_tracker_state=dt_state,
+                )
+
         logger.info("D-SGD complete. Total wall time: %.1fs", time.time() - t0)
         return history
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _truncate_csv_to_round(self, max_round: int) -> None:
+        """Remove CSV rows with ``round`` > *max_round* to avoid duplicates on resume."""
+        if self.output_dir is None:
+            return
+        csv_path = self.output_dir / "metrics.csv"
+        if not csv_path.exists():
+            return
+        try:
+            with csv_path.open("r", newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                fieldnames = reader.fieldnames
+                if not fieldnames:
+                    return
+                kept = [
+                    row for row in reader
+                    if "round" not in row or int(row["round"]) <= max_round
+                ]
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                for row in kept:
+                    writer.writerow(row)
+            logger.info(
+                "Truncated metrics.csv to round ≤%d (%d rows kept)",
+                max_round, len(kept),
+            )
+        except Exception as exc:
+            logger.warning("Could not truncate metrics.csv: %s", exc)
