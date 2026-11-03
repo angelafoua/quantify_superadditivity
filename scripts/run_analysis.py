@@ -72,9 +72,17 @@ def _write_fingerprint(output_dir: str, results_dir: str) -> None:
     stamp.write_text(_summaries_fingerprint(results_dir))
 
 
+def _invalidate_fingerprint(output_dir: str) -> None:
+    """Remove stale fingerprint so a partial re-run is never mistaken for current."""
+    stamp = Path(output_dir) / ".analysis_fingerprint"
+    if stamp.exists():
+        stamp.unlink()
+
+
 def run_factorial_analysis(results_dir: str, output_dir: str) -> None:
     """Run the full 2×2 factorial analysis with interaction test."""
     ensure_dir(output_dir)
+    _invalidate_fingerprint(output_dir)
     agg = ResultAggregator(results_dir)
     df = agg.build_factorial_table()
 
@@ -136,6 +144,7 @@ def run_factorial_analysis(results_dir: str, output_dir: str) -> None:
 
 def run_surface_analysis(results_dir: str, output_dir: str) -> None:
     """Compute and fit the I(alpha, beta) interaction surface."""
+    _invalidate_fingerprint(output_dir)
     ensure_dir(output_dir)
     agg = ResultAggregator(results_dir)
     df = agg.load_summaries()

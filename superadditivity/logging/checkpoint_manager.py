@@ -220,64 +220,67 @@ class TrainingCheckpointManager:
     # Load / discover
     # ------------------------------------------------------------------
 
+    REQUIRED_FIELDS = frozenset({
+        "round_num", "config_hash", "n_clients", "client_states",
+        "history", "rng_python", "rng_numpy", "rng_torch_cpu",
+    })
+
     def find_latest(self) -> Optional[Path]:
-        """Return the path of the newest valid, config-compatible checkpoint.
+        """Return the path of the newest checkpoint, or None if none exist.
 
-        Iterates from newest to oldest.  Corrupt files are skipped (with a
-        warning).  The **first** structurally valid checkpoint is tested for
-        config compatibility; if it mismatches, a ``RuntimeError`` is raised
-        immediately — older checkpoints are **not** tried because all
-        checkpoints within a single run share the same config hash, so a
-        mismatch means the *config* changed, not the checkpoint.
+        **Strict fail-fast**: only the single newest ``.pt`` file is
+        inspected.  If it is corrupt, structurally invalid, or
+        config-incompatible, a ``RuntimeError`` is raised immediately.
+        Older checkpoints are never tried.
 
-        If corrupt checkpoints are skipped and an older valid one is found,
-        a warning notes the progress that will be replayed.
+        Raises
+        ------
+        RuntimeError
+            Latest checkpoint is corrupt, missing required fields, or
+            has an incompatible config hash.
         """
         candidates = sorted(
             self.output_dir.glob(f"{self.FILENAME_PREFIX}_r*.pt"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        skipped_corrupt: List[Path] = []
-        for path in candidates:
-            try:
-                ckpt = torch.load(path, map_location="cpu", weights_only=False)
-                if "round_num" not in ckpt or "client_states" not in ckpt:
-                    skipped_corrupt.append(path)
-                    logger.warning(
-                        "Skipping structurally invalid checkpoint: %s", path,
-                    )
-                    continue
-                # Config compatibility — fail fast, don't fall through.
-                saved_hash = ckpt.get("config_hash", "")
-                if (
-                    self._config_hash
-                    and saved_hash
-                    and saved_hash != self._config_hash
-                ):
-                    raise RuntimeError(
-                        f"Configuration changed since checkpoint was saved "
-                        f"(saved hash={saved_hash}, current hash="
-                        f"{self._config_hash}). Delete the checkpoint "
-                        f"directory to start fresh, or restore the original "
-                        f"configuration."
-                    )
-                if skipped_corrupt:
-                    logger.warning(
-                        "Falling back to older checkpoint %s (skipped %d "
-                        "corrupt: %s). Rounds %d+ will be replayed.",
-                        path.name,
-                        len(skipped_corrupt),
-                        [p.name for p in skipped_corrupt],
-                        ckpt["round_num"] + 1,
-                    )
-                return path
-            except RuntimeError:
-                raise  # config mismatch — propagate
-            except Exception as exc:
-                skipped_corrupt.append(path)
-                logger.warning("Skipping corrupt checkpoint %s: %s", path, exc)
-        return None
+        if not candidates:
+            return None
+
+        path = candidates[0]
+        try:
+            ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Latest checkpoint is corrupt or unreadable: {path}\n"
+                f"  Error: {exc}\n"
+                f"  Next step: delete {path} (or the entire checkpoint "
+                f"directory) and restart the run from scratch."
+            ) from exc
+
+        missing = self.REQUIRED_FIELDS - set(ckpt.keys())
+        if missing:
+            raise RuntimeError(
+                f"Latest checkpoint is structurally invalid: {path}\n"
+                f"  Missing required fields: {sorted(missing)}\n"
+                f"  Next step: delete {path} and restart the run."
+            )
+
+        saved_hash = ckpt.get("config_hash", "")
+        if (
+            self._config_hash
+            and saved_hash
+            and saved_hash != self._config_hash
+        ):
+            raise RuntimeError(
+                f"Configuration changed since checkpoint was saved: {path}\n"
+                f"  Saved config hash:   {saved_hash}\n"
+                f"  Current config hash: {self._config_hash}\n"
+                f"  Next step: delete the checkpoint directory to start "
+                f"fresh, or restore the original configuration."
+            )
+
+        return path
 
     def has_any_checkpoint_files(self) -> bool:
         """Return True if the checkpoint directory contains any ``.pt`` files."""

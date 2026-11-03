@@ -1,4 +1,4 @@
-"""Tests for checkpoint resume, sweep skip, and idempotent analysis.
+"""Tests for checkpoint resume, sweep fail-fast, and idempotent analysis.
 
 All tests run on CPU with synthetic data, no downloads required.
 """
@@ -135,15 +135,17 @@ class TestTrainingCheckpointManager:
         with pytest.raises(RuntimeError, match="Configuration changed"):
             mgr2.load_training_state()
 
-    def test_corrupt_checkpoint_skipped(self, tmp_output):
+    def test_corrupt_only_checkpoint_raises(self, tmp_output):
+        """A single corrupt checkpoint raises immediately."""
         mgr = TrainingCheckpointManager(str(tmp_output), config_dict={"a": 1})
         p = mgr.output_dir / "resume_ckpt_r0010.pt"
         p.write_text("not a valid checkpoint")
 
-        assert mgr.find_latest() is None
+        with pytest.raises(RuntimeError, match="corrupt or unreadable"):
+            mgr.find_latest()
 
-    def test_corrupt_newest_falls_back_to_older(self, tmp_output):
-        """When the newest checkpoint is corrupt, fall back to an older valid one."""
+    def test_corrupt_latest_stops_even_if_older_valid_exists(self, tmp_output):
+        """Strict fail-fast: corrupt latest raises even when an older valid checkpoint exists."""
         cfg = {"x": 1}
         mgr = TrainingCheckpointManager(str(tmp_output), config_dict=cfg)
         clients = _make_clients(n=2)
@@ -152,20 +154,27 @@ class TestTrainingCheckpointManager:
 
         mgr.save_training_state(clients, 10, {})
 
-        # Write a corrupt "newer" checkpoint.
         import time
         corrupt = mgr.output_dir / "resume_ckpt_r0020.pt"
         corrupt.write_text("CORRUPT")
         time.sleep(0.05)
         corrupt.touch()
 
-        found = mgr.find_latest()
-        assert found is not None
-        ckpt = torch.load(found, map_location="cpu", weights_only=False)
-        assert ckpt["round_num"] == 10
+        with pytest.raises(RuntimeError, match="corrupt or unreadable"):
+            mgr.find_latest()
+
+    def test_structurally_invalid_latest_raises(self, tmp_output):
+        """A checkpoint missing required fields raises immediately."""
+        mgr = TrainingCheckpointManager(str(tmp_output), config_dict={"a": 1})
+        p = mgr.output_dir / "resume_ckpt_r0005.pt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"round_num": 5}, p)
+
+        with pytest.raises(RuntimeError, match="structurally invalid"):
+            mgr.find_latest()
 
     def test_config_mismatch_in_find_latest_raises(self, tmp_output):
-        """find_latest raises RuntimeError (not returns None) on config mismatch."""
+        """find_latest raises RuntimeError on config mismatch."""
         cfg1 = {"x": 1}
         mgr1 = TrainingCheckpointManager(str(tmp_output), config_dict=cfg1)
         clients = _make_clients(n=2)
@@ -237,6 +246,11 @@ class TestTrainingCheckpointManager:
         for s in dl_states:
             assert s is not None
 
+    def test_no_checkpoints_returns_none(self, tmp_output):
+        """find_latest returns None when no checkpoint files exist at all."""
+        mgr = TrainingCheckpointManager(str(tmp_output), config_dict={"a": 1})
+        assert mgr.find_latest() is None
+
 
 # ------------------------------------------------------------------ #
 # DSGDCoordinator resume tests
@@ -296,14 +310,13 @@ class TestCoordinatorResume:
         h2 = coord2.run()
         assert h2["round"][-1] == 9
 
-    def test_all_corrupt_checkpoints_raises(self, tmp_output):
-        """If checkpoint files exist but all are corrupt, raise instead of restarting."""
+    def test_corrupt_latest_checkpoint_stops_coordinator(self, tmp_output):
+        """Coordinator raises when the latest checkpoint is corrupt."""
         coord, resume_mgr, _ = _make_coordinator(tmp_output, total_rounds=10)
         ckpt_dir = resume_mgr.output_dir
-        (ckpt_dir / "resume_ckpt_r0005.pt").write_text("CORRUPT1")
-        (ckpt_dir / "resume_ckpt_r0009.pt").write_text("CORRUPT2")
+        (ckpt_dir / "resume_ckpt_r0009.pt").write_text("CORRUPT")
 
-        with pytest.raises(RuntimeError, match="all checkpoints are corrupt"):
+        with pytest.raises(RuntimeError, match="corrupt or unreadable"):
             coord.run()
 
     def test_csv_truncated_on_resume(self, tmp_output):
@@ -340,25 +353,9 @@ class TestCoordinatorResume:
         assert all(v == 1 for v in counts.values()), f"Duplicate rounds: {counts}"
 
     def test_resumed_vs_uninterrupted_final_params(self, tmp_output):
-        """Compare final model parameters: uninterrupted vs interrupted+resumed.
-
-        Both coordinators use total_rounds=10 and checkpoint_every=5, so the
-        checkpoint schedule is identical.  The "partial" run stops the loop
-        after 5 rounds by using total_rounds=5 with the SAME checkpoint
-        cadence, so a checkpoint lands at round 4 (total_rounds-1) in both.
-        The resumed coordinator picks up from the round-4 checkpoint, and we
-        compare final parameters.
-
-        Because the checkpoint cadence differs between partial (total_rounds=5)
-        and full (total_rounds=10) — the partial run checkpoints at round 4
-        as its final round, while the full run checkpoints at round 5 — the
-        DataLoader generator state at resume is captured at a slightly
-        different moment in the training loop.  We therefore compare with a
-        generous floating-point tolerance.
-        """
+        """Compare final model parameters: uninterrupted vs interrupted+resumed."""
         CONFIG = {"total_rounds": 10}
 
-        # --- Uninterrupted run ---
         torch.manual_seed(0)
         np.random.seed(0)
         random.seed(0)
@@ -372,7 +369,6 @@ class TestCoordinatorResume:
             for c in clients_full
         ]
 
-        # --- Interrupted + resumed run ---
         torch.manual_seed(0)
         np.random.seed(0)
         random.seed(0)
@@ -402,11 +398,6 @@ class TestCoordinatorResume:
             for c in clients_resume
         ]
 
-        # Parameters should be very close — the only difference is that
-        # the interrupted run's checkpoint at round 4 captures state at a
-        # slightly different code path (end-of-run checkpoint vs mid-run
-        # checkpoint), which can cause the DataLoader shuffle order to
-        # diverge slightly from the uninterrupted run.
         max_diff = 0.0
         for i in range(len(full_params)):
             for key in full_params[i]:
@@ -419,10 +410,10 @@ class TestCoordinatorResume:
 
 
 # ------------------------------------------------------------------ #
-# Sweep-level skip/resume tests
+# Sweep-level fail-fast tests
 # ------------------------------------------------------------------ #
 
-class TestSweepResume:
+class TestSweepFailFast:
 
     def test_is_complete_requires_valid_json(self, tmp_path):
         from omegaconf import OmegaConf
@@ -446,11 +437,9 @@ class TestSweepResume:
         save_json({"total_rounds": 100}, run_dir / "summary.json")
         assert not _is_complete(cfg)
 
-        # Matching total_rounds but no drift_metrics.h5.
         save_json({"total_rounds": 500}, run_dir / "summary.json")
         assert not _is_complete(cfg)
 
-        # Add drift_metrics.h5 — now complete.
         (run_dir / "drift_metrics.h5").write_bytes(b"HDF5")
         assert _is_complete(cfg)
 
@@ -497,6 +486,67 @@ class TestSweepResume:
         (ckpt_dir / "resume_ckpt_r0050.pt").write_bytes(b"dummy")
         assert _has_resume_checkpoint(cfg)
         assert _run_status(cfg) == "interrupted"
+
+    def test_failed_experiment_stops_sweep(self, tmp_path):
+        """A SweepFailedError is raised when _run_single encounters an error."""
+        from scripts.run_sweep import SweepFailedError, _run_single
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create({
+            "output_dir": str(tmp_path),
+            "run_seed": 42,
+            "graph_seed": 100,
+            "training": {"total_rounds": 500},
+            "experiment_name": "test_fail",
+            "n_clients": 4,
+            "n_communities": 4,
+            "data": {"dataset": "nonexistent", "partition_method": "iid",
+                     "dirichlet_alpha": 1.0, "data_dir": "/nonexistent",
+                     "download": False},
+            "graph": {"topology": "er", "p_out": 0.5, "p_in": 0.5,
+                      "n_clients": 4, "n_communities": 4},
+            "model": {"architecture": "resnet18_cifar"},
+        })
+
+        with pytest.raises(SweepFailedError):
+            _run_single(cfg, "test_fail_label")
+
+    def test_sweep_failed_error_writes_error_json(self, tmp_path):
+        """When a sweep experiment fails, error.json is written to the run dir."""
+        from scripts.run_sweep import _write_error_log
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create({
+            "output_dir": str(tmp_path),
+            "run_seed": 42,
+            "graph_seed": 100,
+            "training": {"total_rounds": 500},
+        })
+
+        _write_error_log(cfg, "test_label", ValueError("boom"))
+        error_path = tmp_path / "seed_42_graph_100" / "error.json"
+        assert error_path.exists()
+        data = load_json(error_path)
+        assert data["experiment"] == "test_label"
+        assert data["error_type"] == "ValueError"
+        assert "boom" in data["error_message"]
+
+    def test_sweep_exit_code_nonzero(self, tmp_path):
+        """The sweep script exits nonzero when an experiment fails."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/run_sweep.py",
+             "--experiment", "core_factorial", "--resume"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        # core_factorial config may not exist or the experiment will fail
+        # on synthetic data — either way, exit code should be nonzero
+        # if any run fails.  We just verify it doesn't silently succeed
+        # with exit code 0 when no data is available.
+        assert result.returncode != 0
 
 
 # ------------------------------------------------------------------ #
@@ -605,6 +655,30 @@ class TestAnalysisCaching:
 
         (fig_dir / "factorial_grid.pdf").write_bytes(b"PDF")
         assert _is_viz_current(fig_dir, results_dir)
+
+    def test_stale_fingerprint_invalidated_on_analysis(self, tmp_path):
+        """_invalidate_fingerprint removes the stamp file."""
+        from scripts.run_analysis import _invalidate_fingerprint
+
+        output_dir = tmp_path / "analysis"
+        output_dir.mkdir()
+        stamp = output_dir / ".analysis_fingerprint"
+        stamp.write_text("stale")
+
+        _invalidate_fingerprint(str(output_dir))
+        assert not stamp.exists()
+
+    def test_stale_viz_fingerprint_invalidated(self, tmp_path):
+        """_invalidate_viz_fingerprint removes the stamp file."""
+        from scripts.run_visualization import _invalidate_viz_fingerprint
+
+        fig_dir = tmp_path / "figures"
+        fig_dir.mkdir()
+        stamp = fig_dir / ".viz_fingerprint"
+        stamp.write_text("stale")
+
+        _invalidate_viz_fingerprint(fig_dir)
+        assert not stamp.exists()
 
 
 # ------------------------------------------------------------------ #

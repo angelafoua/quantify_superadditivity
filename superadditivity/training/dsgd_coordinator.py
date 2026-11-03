@@ -94,52 +94,37 @@ class DSGDCoordinator:
         Raises
         ------
         RuntimeError
-            If checkpoint files exist but none are usable (all corrupt),
-            indicating a prior run that cannot be resumed.  Delete the run
-            directory to start fresh.
+            If checkpoint loading fails for any reason (corrupt, missing
+            fields, config mismatch, client count mismatch).  The error
+            message includes the checkpoint path and a concrete next step.
         """
         start_round = 0
         history: Dict[str, list] = {"round": [], "lr": [], "mean_loss": [], "wall_time": []}
 
-        # ---- Attempt resume ----
+        # ---- Attempt resume (strict fail-fast) ----
         if self.resume_manager is not None:
-            latest = self.resume_manager.find_latest()  # may raise on config mismatch
+            latest = self.resume_manager.find_latest()  # raises on corrupt/invalid/mismatch
             if latest is not None:
-                try:
-                    ckpt = self.resume_manager.load_training_state(latest)
-                    self.resume_manager.restore_clients(self.clients, ckpt)
-                    self.resume_manager.restore_rng(ckpt)
+                ckpt = self.resume_manager.load_training_state(latest)
+                self.resume_manager.restore_clients(self.clients, ckpt)
+                self.resume_manager.restore_rng(ckpt)
 
-                    # Restore per-client DataLoader generator states so that
-                    # the data shuffle order matches uninterrupted training.
-                    dl_states = ckpt.get("dataloader_generator_states", [])
-                    for i, c in enumerate(self.clients):
-                        if i < len(dl_states) and dl_states[i] is not None:
-                            c._get_loader()  # ensure the DataLoader exists
-                            c._loader.generator.set_state(dl_states[i])
+                dl_states = ckpt.get("dataloader_generator_states", [])
+                for i, c in enumerate(self.clients):
+                    if i < len(dl_states) and dl_states[i] is not None:
+                        c._get_loader()
+                        c._loader.generator.set_state(dl_states[i])
 
-                    history = ckpt.get("history", history)
-                    start_round = ckpt["round_num"] + 1
+                history = ckpt.get("history", history)
+                start_round = ckpt["round_num"] + 1
 
-                    # Truncate CSV log to the checkpoint round so that
-                    # rounds after the checkpoint are not duplicated.
-                    self._truncate_csv_to_round(ckpt["round_num"])
+                self._truncate_csv_to_round(ckpt["round_num"])
 
-                    if self.drift_tracker is not None and "drift_tracker_state" in ckpt:
-                        self.drift_tracker.load_state(ckpt["drift_tracker_state"])
-                    logger.info(
-                        "Resumed from round %d (checkpoint %s)",
-                        ckpt["round_num"], latest.name,
-                    )
-                except RuntimeError as exc:
-                    logger.error("Cannot resume: %s", exc)
-                    raise
-            elif self.resume_manager.has_any_checkpoint_files():
-                raise RuntimeError(
-                    f"Previous training found in "
-                    f"{self.resume_manager.output_dir} but all checkpoints "
-                    f"are corrupt. To restart from scratch, delete the run "
-                    f"directory. To preserve existing artifacts, rename it."
+                if self.drift_tracker is not None and "drift_tracker_state" in ckpt:
+                    self.drift_tracker.load_state(ckpt["drift_tracker_state"])
+                logger.info(
+                    "Resumed from round %d (checkpoint %s)",
+                    ckpt["round_num"], latest.name,
                 )
 
         if start_round >= self.total_rounds:

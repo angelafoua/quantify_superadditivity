@@ -72,6 +72,13 @@ def _write_viz_fingerprint(fig_dir: Path, results_dir: Path) -> None:
     stamp.write_text(_results_fingerprint(results_dir))
 
 
+def _invalidate_viz_fingerprint(fig_dir: Path) -> None:
+    """Remove stale fingerprint so a partial re-run is never mistaken for current."""
+    stamp = fig_dir / ".viz_fingerprint"
+    if stamp.exists():
+        stamp.unlink()
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -97,6 +104,7 @@ def main() -> None:
         )
         return
 
+    _invalidate_viz_fingerprint(fig_dir)
     set_publication_style()
 
     agg = ResultAggregator(str(results_dir))
