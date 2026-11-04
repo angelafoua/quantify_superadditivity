@@ -22,19 +22,28 @@ from superadditivity.visualization.figure_style import set_publication_style
 logger = logging.getLogger(__name__)
 
 
+def _find_summaries(results_dir: Path) -> list:
+    """Find summary.json files in nested or sibling-directory layouts."""
+    found = sorted(results_dir.rglob("summary.json"))
+    if found:
+        return found
+    parent = results_dir.parent
+    prefix = results_dir.name + "_"
+    if parent.is_dir():
+        for sibling in sorted(parent.iterdir()):
+            if sibling.is_dir() and sibling.name.startswith(prefix):
+                found.extend(sorted(sibling.rglob("summary.json")))
+    return found
+
+
 def _results_fingerprint(results_dir: Path) -> str:
     """Hash summaries + analysis JSON to detect when figures need updating."""
     md5 = hashlib.md5()
-    for pattern in ("**/summary.json", "**/analysis/*.json"):
-        for p in sorted(results_dir.rglob(pattern.split("/")[-1]) if "/" not in pattern
-                        else results_dir.glob(pattern)):
-            try:
-                md5.update(p.read_bytes())
-            except OSError:
-                pass
-    # More reliable: hash all summary.json and analysis/*.json
-    for p in sorted(results_dir.rglob("summary.json")):
-        md5.update(p.read_bytes())
+    for p in _find_summaries(results_dir):
+        try:
+            md5.update(p.read_bytes())
+        except OSError:
+            pass
     analysis_dir = results_dir / "analysis"
     if analysis_dir.is_dir():
         for p in sorted(analysis_dir.glob("*.json")):

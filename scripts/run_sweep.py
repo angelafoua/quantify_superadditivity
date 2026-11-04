@@ -159,7 +159,7 @@ def run_core_factorial(cfg: dict, resume: bool = False) -> None:
                     f"training={cfg['training']}",
                     f"run_seed={run_seed}",
                     f"graph_seed={graph_seed}",
-                    f"experiment_name={cfg['experiment_name']}_{cell_name}",
+                    f"experiment_name={cfg['experiment_name']}/{cell_name}",
                 ]
                 run_cfg = _build_config(overrides)
                 status = _run_status(run_cfg) if resume else "new"
@@ -191,7 +191,7 @@ def run_extended_grid(cfg: dict, resume: bool = False) -> None:
                         f"training={cfg['training']}",
                         f"run_seed={run_seed}",
                         f"graph_seed={graph_seed}",
-                        f"experiment_name={cfg['experiment_name']}_{data_level}_{network_level}",
+                        f"experiment_name={cfg['experiment_name']}/{data_level}_{network_level}",
                     ]
                     run_cfg = _build_config(overrides)
                     status = _run_status(run_cfg) if resume else "new"
@@ -227,7 +227,7 @@ def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
                         f"training={cfg['training']}",
                         f"run_seed={run_seed}",
                         f"graph_seed={graph_seed}",
-                        f"experiment_name={cfg['experiment_name']}_pout{p_out}_{data_level}",
+                        f"experiment_name={cfg['experiment_name']}/pout{p_out}_{data_level}",
                     ]
                     run_cfg = _build_config(overrides)
                     status = _run_status(run_cfg) if resume else "new"
