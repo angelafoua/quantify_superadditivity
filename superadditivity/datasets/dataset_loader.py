@@ -513,6 +513,8 @@ class DatasetLoader:
                 "installed. Install it with: pip install medmnist"
             ) from None
 
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
         train_ds = PathMNISTClass(
             split="train", transform=train_tf,
             download=self.download, root=str(self.data_dir),
