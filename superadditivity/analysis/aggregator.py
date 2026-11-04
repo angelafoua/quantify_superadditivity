@@ -27,22 +27,42 @@ class ResultAggregator:
     def __init__(self, results_dir: str) -> None:
         self.results_dir = Path(results_dir)
 
+    def _find_summaries(self) -> List[Path]:
+        """Find all ``summary.json`` files under results_dir.
+
+        If results_dir itself contains summaries (nested layout), return those.
+        Otherwise, fall back to sibling directories whose name starts with
+        ``results_dir.name + '_'`` (flat layout produced before the nesting fix).
+        """
+        found = sorted(self.results_dir.rglob("summary.json"))
+        if found:
+            return found
+        parent = self.results_dir.parent
+        prefix = self.results_dir.name + "_"
+        if parent.is_dir():
+            for sibling in sorted(parent.iterdir()):
+                if sibling.is_dir() and sibling.name.startswith(prefix):
+                    found.extend(sorted(sibling.rglob("summary.json")))
+        return found
+
     def load_summaries(self) -> pd.DataFrame:
         """Load all ``summary.json`` files into a DataFrame."""
         import re
 
         records: List[Dict[str, Any]] = []
-        for summary_path in sorted(self.results_dir.rglob("summary.json")):
+        for summary_path in self._find_summaries():
             try:
                 data = load_json(summary_path)
                 data["_run_dir"] = str(summary_path.parent)
 
-                # Parse p_out and data regime from ancestor folder names when absent.
-                # Walk from immediate parent up to (but not including) results_dir.
+                # Parse p_out and data regime from ancestor folder names.
+                # Collect names from the summary up to (not including)
+                # results_dir.parent so both nested and sibling layouts work.
+                stop = self.results_dir.parent
                 ancestor_names = [
                     p.name
                     for p in summary_path.parents
-                    if p != self.results_dir and self.results_dir in p.parents or p == summary_path.parent
+                    if p != stop and stop in p.parents or p == summary_path.parent
                 ]
                 combined = " ".join(ancestor_names)
                 if "p_out" not in data:

@@ -28,10 +28,25 @@ from superadditivity.utils.io import ensure_dir, save_json, load_json
 logger = logging.getLogger(__name__)
 
 
+def _find_summaries(results_dir: str) -> list:
+    """Find summary.json files in nested or sibling-directory layouts."""
+    rd = Path(results_dir)
+    found = sorted(rd.rglob("summary.json"))
+    if found:
+        return found
+    parent = rd.parent
+    prefix = rd.name + "_"
+    if parent.is_dir():
+        for sibling in sorted(parent.iterdir()):
+            if sibling.is_dir() and sibling.name.startswith(prefix):
+                found.extend(sorted(sibling.rglob("summary.json")))
+    return found
+
+
 def _summaries_fingerprint(results_dir: str) -> str:
     """Hash all summary.json files in the results tree for change detection."""
     md5 = hashlib.md5()
-    for p in sorted(Path(results_dir).rglob("summary.json")):
+    for p in _find_summaries(results_dir):
         md5.update(p.read_bytes())
     return md5.hexdigest()
 
