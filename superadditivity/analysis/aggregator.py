@@ -28,22 +28,47 @@ class ResultAggregator:
         self.results_dir = Path(results_dir)
 
     def _find_summaries(self) -> List[Path]:
-        """Find all ``summary.json`` files under results_dir.
+        """Find all ``summary.json`` files for this experiment.
 
-        If results_dir itself contains summaries (nested layout), return those.
-        Otherwise, fall back to sibling directories whose name starts with
-        ``results_dir.name + '_'`` (flat layout produced before the nesting fix).
+        Checks three sources in order:
+        1. A ``sweep_manifest.json`` in results_dir listing exact run paths
+           (works reliably on FUSE mounts like Google Drive).
+        2. Recursive glob inside results_dir (nested layout).
+        3. Direct-path lookup in sibling directories whose name starts with
+           ``results_dir.name + '_'`` (flat layout).
         """
+        manifest = self.results_dir / "sweep_manifest.json"
+        if manifest.exists():
+            try:
+                data = load_json(manifest)
+                found = []
+                for run_dir in data.get("run_dirs", []):
+                    s = Path(run_dir) / "summary.json"
+                    if s.exists():
+                        found.append(s)
+                if found:
+                    return sorted(found)
+            except Exception as e:
+                logger.warning("Failed to read manifest %s: %s", manifest, e)
+
         found = sorted(self.results_dir.rglob("summary.json"))
         if found:
             return found
+
         parent = self.results_dir.parent
         prefix = self.results_dir.name + "_"
         if parent.is_dir():
             for sibling in sorted(parent.iterdir()):
                 if sibling.is_dir() and sibling.name.startswith(prefix):
-                    found.extend(sorted(sibling.rglob("summary.json")))
-        return found
+                    s = sibling / "summary.json"
+                    if not s.exists():
+                        for child in sibling.iterdir():
+                            sc = child / "summary.json"
+                            if sc.exists():
+                                found.append(sc)
+                    else:
+                        found.append(s)
+        return sorted(found)
 
     def load_summaries(self) -> pd.DataFrame:
         """Load all ``summary.json`` files into a DataFrame."""

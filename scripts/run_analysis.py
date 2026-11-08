@@ -29,8 +29,19 @@ logger = logging.getLogger(__name__)
 
 
 def _find_summaries(results_dir: str) -> list:
-    """Find summary.json files in nested or sibling-directory layouts."""
+    """Find summary.json files via manifest, nested glob, or sibling lookup."""
     rd = Path(results_dir)
+    manifest = rd / "sweep_manifest.json"
+    if manifest.exists():
+        try:
+            from superadditivity.utils.io import load_json
+            data = load_json(manifest)
+            found = [Path(d) / "summary.json" for d in data.get("run_dirs", [])]
+            found = sorted(p for p in found if p.exists())
+            if found:
+                return found
+        except Exception:
+            pass
     found = sorted(rd.rglob("summary.json"))
     if found:
         return found
@@ -39,8 +50,11 @@ def _find_summaries(results_dir: str) -> list:
     if parent.is_dir():
         for sibling in sorted(parent.iterdir()):
             if sibling.is_dir() and sibling.name.startswith(prefix):
-                found.extend(sorted(sibling.rglob("summary.json")))
-    return found
+                for child in sibling.iterdir():
+                    s = child / "summary.json"
+                    if s.exists():
+                        found.append(s)
+    return sorted(found)
 
 
 def _summaries_fingerprint(results_dir: str) -> str:

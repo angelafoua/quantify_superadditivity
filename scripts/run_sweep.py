@@ -131,6 +131,22 @@ class SweepFailedError(Exception):
     """Raised when an experiment in a sweep fails, stopping the sweep."""
 
 
+def _write_manifest(experiment_name: str, run_dirs: list) -> None:
+    """Write a manifest listing all run directories for a sweep.
+
+    This lets the analysis aggregator locate results by direct path
+    instead of relying on recursive directory traversal, which can
+    fail on FUSE-mounted filesystems like Google Drive in Colab.
+    """
+    manifest_path = Path("outputs") / experiment_name / "sweep_manifest.json"
+    ensure_dir(manifest_path.parent)
+    save_json(
+        {"experiment_name": experiment_name, "run_dirs": [str(d) for d in run_dirs]},
+        manifest_path,
+    )
+    logger.info("Wrote sweep manifest: %s (%d runs)", manifest_path, len(run_dirs))
+
+
 def _run_single(run_cfg: "DictConfig", label: str) -> None:
     """Run a single experiment, converting any failure to a SweepFailedError."""
     from scripts.run_experiment import run
@@ -146,6 +162,7 @@ def _run_single(run_cfg: "DictConfig", label: str) -> None:
 
 def run_core_factorial(cfg: dict, resume: bool = False) -> None:
     """Run all cells of the core 2x2 factorial."""
+    all_run_dirs: list = []
     for cell_name, cell_cfg in cfg["cells"].items():
         for run_seed in cfg["run_seeds"]:
             for graph_seed in cfg["graph_seeds"]:
@@ -159,9 +176,10 @@ def run_core_factorial(cfg: dict, resume: bool = False) -> None:
                     f"training={cfg['training']}",
                     f"run_seed={run_seed}",
                     f"graph_seed={graph_seed}",
-                    f"experiment_name={cfg['experiment_name']}/{cell_name}",
+                    f"experiment_name={cfg['experiment_name']}_{cell_name}",
                 ]
                 run_cfg = _build_config(overrides)
+                all_run_dirs.append(_run_dir(run_cfg))
                 status = _run_status(run_cfg) if resume else "new"
                 if status == "complete":
                     logger.info("SKIP (complete): %s", _run_dir(run_cfg))
@@ -171,10 +189,12 @@ def run_core_factorial(cfg: dict, resume: bool = False) -> None:
                 else:
                     logger.info("START (new): %s", _run_dir(run_cfg))
                 _run_single(run_cfg, label)
+    _write_manifest(cfg["experiment_name"], all_run_dirs)
 
 
 def run_extended_grid(cfg: dict, resume: bool = False) -> None:
     """Run all cells of the extended 4x4 factorial."""
+    all_run_dirs: list = []
     for data_level in cfg["data_levels"]:
         for network_level in cfg["network_levels"]:
             for run_seed in cfg["run_seeds"]:
@@ -191,9 +211,10 @@ def run_extended_grid(cfg: dict, resume: bool = False) -> None:
                         f"training={cfg['training']}",
                         f"run_seed={run_seed}",
                         f"graph_seed={graph_seed}",
-                        f"experiment_name={cfg['experiment_name']}/{data_level}_{network_level}",
+                        f"experiment_name={cfg['experiment_name']}_{data_level}_{network_level}",
                     ]
                     run_cfg = _build_config(overrides)
+                    all_run_dirs.append(_run_dir(run_cfg))
                     status = _run_status(run_cfg) if resume else "new"
                     if status == "complete":
                         logger.info("SKIP (complete): %s", _run_dir(run_cfg))
@@ -203,6 +224,7 @@ def run_extended_grid(cfg: dict, resume: bool = False) -> None:
                     else:
                         logger.info("START (new): %s", _run_dir(run_cfg))
                     _run_single(run_cfg, label)
+    _write_manifest(cfg["experiment_name"], all_run_dirs)
 
 
 def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
@@ -213,6 +235,7 @@ def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
     )
     done = 0
     skipped = 0
+    all_run_dirs: list = []
 
     for data_level in cfg["data_levels"]:
         for p_out in cfg["p_out_values"]:
@@ -227,9 +250,10 @@ def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
                         f"training={cfg['training']}",
                         f"run_seed={run_seed}",
                         f"graph_seed={graph_seed}",
-                        f"experiment_name={cfg['experiment_name']}/pout{p_out}_{data_level}",
+                        f"experiment_name={cfg['experiment_name']}_pout{p_out}_{data_level}",
                     ]
                     run_cfg = _build_config(overrides)
+                    all_run_dirs.append(_run_dir(run_cfg))
                     status = _run_status(run_cfg) if resume else "new"
 
                     label = (
@@ -263,6 +287,7 @@ def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
         "Sweep progress: %d skipped, %d completed, %d total of %d",
         skipped, done, skipped + done, total,
     )
+    _write_manifest(cfg["experiment_name"], all_run_dirs)
 
 
 def _build_config(overrides: list) -> "DictConfig":
