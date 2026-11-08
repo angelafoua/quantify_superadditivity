@@ -210,6 +210,31 @@ DATASET_SPECS: Dict[str, DatasetSpec] = {
 _SUPPORTED_DATASETS = frozenset(DATASET_SPECS.keys())
 
 
+class _ScalarLabelWrapper(Dataset):
+    """Wraps a dataset whose ``__getitem__`` returns array-shaped labels
+    (e.g. MedMNIST's shape-(1,) arrays) and converts them to Python ints
+    so that the default DataLoader collation produces 1-D target tensors
+    compatible with ``CrossEntropyLoss``."""
+
+    def __init__(self, dataset: Dataset) -> None:
+        self._dataset = dataset
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def __getitem__(self, idx: int):
+        sample = self._dataset[idx]
+        img, label = sample[0], sample[1]
+        if hasattr(label, "item"):
+            label = label.item()
+        elif hasattr(label, "__len__") and len(label) == 1:
+            label = int(label[0])
+        return img, label
+
+    def __getattr__(self, name: str):
+        return getattr(self._dataset, name)
+
+
 class DatasetLoader:
     """Unified loader for all supported datasets.
 
@@ -528,6 +553,11 @@ class DatasetLoader:
             train_ds.targets = train_ds.labels.squeeze().tolist()
         if not hasattr(test_ds, "targets"):
             test_ds.targets = test_ds.labels.squeeze().tolist()
+
+        # MedMNIST __getitem__ returns labels as shape-(1,) arrays;
+        # wrap to yield scalar labels that CrossEntropyLoss expects.
+        train_ds = _ScalarLabelWrapper(train_ds)
+        test_ds = _ScalarLabelWrapper(test_ds)
         return train_ds, test_ds
 
     def _load_speech_commands(self) -> Tuple[Dataset, Dataset]:
