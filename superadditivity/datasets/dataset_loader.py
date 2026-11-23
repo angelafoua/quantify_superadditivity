@@ -456,6 +456,16 @@ class DatasetLoader:
         """
         domain_dir = self.data_dir / "clipart"
         if domain_dir.exists():
+            for split in ("train", "test"):
+                split_dir = domain_dir / split
+                if not any(p.is_dir() for p in split_dir.glob("*")):
+                    raise FileNotFoundError(
+                        f"DomainNet split directory {split_dir} has no class "
+                        f"folders (incomplete or failed preparation). Delete "
+                        f"{domain_dir} and re-run 'python "
+                        f"scripts/prepare_domainnet.py --data_dir "
+                        f"{self.data_dir}'."
+                    )
             train_ds = torchvision.datasets.ImageFolder(
                 root=str(domain_dir / "train"), transform=train_tf,
             )
