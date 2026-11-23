@@ -4,11 +4,11 @@
 Usage
 -----
     # Auto-download (uses the official cleaned .zip from ai.bu.edu):
-    python scripts/prepare_domainnet.py --data_dir data/domainnet
+    python scripts/prepare_domainnet.py --data_dir data
 
     # If you already downloaded the files manually from https://ai.bu.edu/DomainNet/
     # place them in a directory and point the script at it:
-    python scripts/prepare_domainnet.py --data_dir data/domainnet \\
+    python scripts/prepare_domainnet.py --data_dir data \\
         --local_zip /path/to/clipart.zip \\
         --local_train_txt /path/to/clipart_train.txt \\
         --local_test_txt /path/to/clipart_test.txt
@@ -45,28 +45,44 @@ TEST_SPLIT_URL = (
 
 
 def download(url: str, dest: Path) -> None:
-    """Download *url* to *dest* with a progress indicator."""
+    """Download *url* to *dest*.
+
+    The file is written to a ``.part`` temporary path and renamed only after
+    the transfer completes, so an interrupted download never leaves a
+    truncated file that later runs would mistake for a finished one.
+    """
     if dest.exists():
         print(f"  Already exists: {dest}")
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
     print(f"  Downloading {url} ...")
-    urllib.request.urlretrieve(url, str(dest))
+    urllib.request.urlretrieve(url, str(tmp))
+    tmp.replace(dest)
     print(f"  Saved to {dest}")
 
 
 def extract_archive(archive_path: Path, raw_dir: Path) -> None:
-    """Extract the .zip archive to *raw_dir*."""
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    """Extract the .zip archive to *raw_dir*.
+
+    Extracts into a temporary sibling directory and renames it into place on
+    success, so an interrupted extraction is retried on the next run instead
+    of being treated as complete.
+    """
     suffix = archive_path.suffix.lower()
     if suffix != ".zip":
         raise ValueError(
             f"Expected .zip archive, got {archive_path.suffix}. "
             f"Download clipart.zip from https://ai.bu.edu/DomainNet/"
         )
+    tmp_dir = raw_dir.with_name(raw_dir.name + ".part")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True)
     print(f"  Extracting zip archive to {raw_dir} ...")
     with zipfile.ZipFile(archive_path, "r") as zf:
-        zf.extractall(path=str(raw_dir))
+        zf.extractall(path=str(tmp_dir))
+    tmp_dir.replace(raw_dir)
     print(f"  Extracted to {raw_dir}")
 
 
@@ -169,7 +185,8 @@ def main() -> None:
         description=(
             "Download and prepare DomainNet clipart for training.\n\n"
             "By default the script auto-downloads the official cleaned .zip "
-            "(~1.3 GB) from ai.bu.edu/DomainNet/ together with the train/test "
+            "(~1.3 GB) from csr.bu.edu (the VisDA 2019 mirror of DomainNet) "
+            "together with the train/test "
             "split .txt files.\n\n"
             "If you have already downloaded the files manually, pass their "
             "local paths via --local_zip / --local_train_txt / --local_test_txt."
@@ -177,8 +194,11 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--data_dir", type=str, default="data/domainnet",
-        help="Root data directory (default: data/domainnet).",
+        "--data_dir", type=str, default="data",
+        help=(
+            "Root data directory. Output goes to <data_dir>/clipart/ and "
+            "must match the data_dir given to DatasetLoader (default: data)."
+        ),
     )
     parser.add_argument(
         "--local_zip", type=str, default=None,
