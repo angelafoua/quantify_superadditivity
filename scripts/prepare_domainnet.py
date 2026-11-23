@@ -273,7 +273,7 @@ def main() -> None:
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
-    download_dir = data_dir / "_downloads"
+    download_dir = data_dir / "staging_clipart"
     download_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
