@@ -62,6 +62,61 @@ def download(url: str, dest: Path) -> None:
     print(f"  Saved to {dest}")
 
 
+_IMG_SUFFIXES = {".jpg", ".jpeg", ".png"}
+
+
+def split_file_problem(path: Path) -> str | None:
+    """Return a description of what is wrong with a split file, or None if OK.
+
+    A valid DomainNet split file has lines of the form
+    ``clipart/<class>/<image>.jpg <label>``. A common failure is an HTML
+    error page (proxy/captive portal/redirect) saved in its place.
+    """
+    try:
+        with open(path, errors="replace") as f:
+            head = [ln.strip() for ln in f.readlines()[:5] if ln.strip()]
+    except OSError as exc:
+        return f"cannot read {path}: {exc}"
+    if not head:
+        return f"{path} is empty"
+    for line in head:
+        parts = line.split()
+        if (
+            len(parts) != 2
+            or not parts[1].lstrip("-").isdigit()
+            or Path(parts[0]).suffix.lower() not in _IMG_SUFFIXES
+        ):
+            return f"{path} does not look like a split file; first line: {line[:120]!r}"
+    return None
+
+
+def archive_problem(path: Path) -> str | None:
+    """Return a description of what is wrong with the archive, or None if OK."""
+    if not zipfile.is_zipfile(path):
+        return f"{path} is not a valid zip archive (size {path.stat().st_size:,} bytes)"
+    return None
+
+
+def fetch_validated(url: str, dest: Path, check) -> None:
+    """Download *url* to *dest*, discarding and retrying once if it is invalid.
+
+    Handles stale or corrupt files cached by an earlier failed run.
+    """
+    for attempt in (1, 2):
+        download(url, dest)
+        problem = check(dest)
+        if problem is None:
+            return
+        print(f"  Invalid download ({problem}); removing it.")
+        dest.unlink(missing_ok=True)
+        if attempt == 2:
+            raise RuntimeError(
+                f"Downloaded file from {url} is invalid: {problem}. "
+                f"Download it manually from https://ai.bu.edu/DomainNet/ and "
+                f"pass it with --local_zip / --local_train_txt / --local_test_txt."
+            )
+
+
 def extract_archive(archive_path: Path, raw_dir: Path) -> None:
     """Extract the .zip archive to *raw_dir*.
 
@@ -232,7 +287,7 @@ def main() -> None:
         print(f"  Using local archive: {archive_path}")
     else:
         archive_path = download_dir / "clipart.zip"
-        download(CLIPART_ZIP_URL, archive_path)
+        fetch_validated(CLIPART_ZIP_URL, archive_path, archive_problem)
 
     # Train / test split files
     if args.local_train_txt:
@@ -240,26 +295,39 @@ def main() -> None:
         print(f"  Using local train split: {train_split}")
     else:
         train_split = download_dir / "clipart_train.txt"
-        download(TRAIN_SPLIT_URL, train_split)
+        fetch_validated(TRAIN_SPLIT_URL, train_split, split_file_problem)
 
     if args.local_test_txt:
         test_split = Path(args.local_test_txt)
         print(f"  Using local test split: {test_split}")
     else:
         test_split = download_dir / "clipart_test.txt"
-        download(TEST_SPLIT_URL, test_split)
+        fetch_validated(TEST_SPLIT_URL, test_split, split_file_problem)
+
+    # Local files are not re-downloaded, so validate them too.
+    for problem in (
+        archive_problem(archive_path),
+        split_file_problem(train_split),
+        split_file_problem(test_split),
+    ):
+        if problem:
+            raise RuntimeError(problem)
 
     # ------------------------------------------------------------------ #
     # Step 2 — extract
     # ------------------------------------------------------------------ #
     raw_dir = download_dir / "clipart_raw"
+    if raw_dir.exists():
+        try:
+            image_root = find_image_root(raw_dir)
+            print("Step 2/3: Already extracted, skipping.")
+        except FileNotFoundError:
+            print("Step 2/3: Existing extraction is incomplete; redoing it.")
+            shutil.rmtree(raw_dir)
     if not raw_dir.exists():
         print("Step 2/3: Extracting archive ...")
         extract_archive(archive_path, raw_dir)
-    else:
-        print("Step 2/3: Already extracted, skipping.")
-
-    image_root = find_image_root(raw_dir)
+        image_root = find_image_root(raw_dir)
     print(f"  Image root: {image_root}")
 
     # ------------------------------------------------------------------ #
@@ -271,6 +339,20 @@ def main() -> None:
 
     n_train = organise_split(train_split, image_root, out_train)
     n_test = organise_split(test_split, image_root, out_test)
+
+    if n_train == 0 or n_test == 0:
+        # Do not leave empty split directories behind: they make the loader
+        # fail later with a confusing "no class folder" error.
+        shutil.rmtree(data_dir / "clipart", ignore_errors=True)
+        sample_classes = sorted(d.name for d in image_root.iterdir() if d.is_dir())[:3]
+        with open(train_split, errors="replace") as f:
+            sample_lines = [ln.strip() for ln in f.readlines()[:2]]
+        raise RuntimeError(
+            f"No images were copied (train={n_train}, test={n_test}). "
+            f"Split-file lines such as {sample_lines} did not match files "
+            f"under {image_root} (e.g. classes {sample_classes}). "
+            f"Check that the archive and split files belong together."
+        )
 
     n_train_classes = sum(1 for d in out_train.iterdir() if d.is_dir())
     n_test_classes = sum(1 for d in out_test.iterdir() if d.is_dir())
