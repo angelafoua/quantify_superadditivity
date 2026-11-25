@@ -1,0 +1,6 @@
+dataset: domainnet126
+data_dir: data/DomainNet-126
+download: false
+partition_method: dirichlet_semantic
+dirichlet_alpha: 10.0
+n_classes: 126

@@ -2,7 +2,7 @@
 
 Handles downloading, normalization, probe-set extraction, and semantic
 clustering for all benchmark datasets used in this project:
-CIFAR-100, CIFAR-10, EMNIST, DomainNet, iNaturalist, PathMNIST,
+CIFAR-100, CIFAR-10, EMNIST, DomainNet-126 (clipart), iNaturalist, PathMNIST,
 and Google Speech Commands.
 
 Each dataset is described by a ``DatasetSpec`` that stores its metadata
@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 import torchvision
 import torchvision.transforms as T
 
-from superadditivity.datasets.domainnet_prep import is_prepared, prepare_domainnet
+from superadditivity.datasets.domainnet126 import build_domainnet126
 from superadditivity.utils.seed import PROBE_SEED, seed_worker
 
 logger = logging.getLogger(__name__)
@@ -147,18 +147,21 @@ DATASET_SPECS: Dict[str, DatasetSpec] = {
         },
         n_semantic_clusters=3,
     ),
-    "domainnet": DatasetSpec(
-        name="domainnet",
-        num_classes=345,
+    "domainnet126": DatasetSpec(
+        name="domainnet126",
+        num_classes=126,
         image_size=64,
         in_channels=3,
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225),
+        # Contiguous blocks of the alphabetical class indices (sizes
+        # 31/31/32/32). These are NOT semantic groups: DomainNet-126 has no
+        # superclass hierarchy, so the clusters only partition the label space.
         semantic_clusters={
-            0: list(range(0, 86)),
-            1: list(range(86, 172)),
-            2: list(range(172, 258)),
-            3: list(range(258, 345)),
+            0: list(range(0, 31)),
+            1: list(range(31, 62)),
+            2: list(range(62, 94)),
+            3: list(range(94, 126)),
         },
         n_semantic_clusters=4,
     ),
@@ -318,7 +321,7 @@ class DatasetLoader:
                 T.Normalize(mean, std),
             ])
 
-        if self.dataset_name == "domainnet":
+        if self.dataset_name == "domainnet126":
             if train:
                 return T.Compose([
                     T.Resize((size, size)),
@@ -413,9 +416,15 @@ class DatasetLoader:
                 transform=test_tf, download=self.download,
             )
 
-        elif self.dataset_name == "domainnet":
-            self._train_dataset, self._test_dataset = self._load_domainnet(
-                train_tf, test_tf,
+        elif self.dataset_name == "domainnet126":
+            if self.download:
+                logger.warning(
+                    "DomainNet-126 cannot be downloaded automatically "
+                    "(download=True is ignored); it must already be at %s.",
+                    self.data_dir,
+                )
+            self._train_dataset, self._test_dataset = build_domainnet126(
+                self.data_dir, train_tf, test_tf,
             )
 
         elif self.dataset_name == "inaturalist":
@@ -445,42 +454,6 @@ class DatasetLoader:
     # ------------------------------------------------------------------
     # Dataset-specific loaders
     # ------------------------------------------------------------------
-
-    def _load_domainnet(
-        self, train_tf: T.Compose, test_tf: T.Compose,
-    ) -> Tuple[Dataset, Dataset]:
-        """Load DomainNet (clipart domain for tractability).
-
-        Uses torchvision ImageFolder on ``<data_dir>/clipart/{train,test}``.
-
-        If that directory is missing or incomplete and ``download=True``, the
-        data is downloaded and organised first (see
-        :func:`superadditivity.datasets.domainnet_prep.prepare_domainnet`).
-        With ``download=False`` a FileNotFoundError is raised instead.
-        """
-        domain_dir = self.data_dir / "clipart"
-        if not is_prepared(self.data_dir):
-            if not self.download:
-                raise FileNotFoundError(
-                    f"DomainNet clipart data not found or incomplete at "
-                    f"{domain_dir} (expected class folders under train/ and "
-                    f"test/). Use download=True (config: data.download: true) "
-                    f"or run 'python scripts/prepare_domainnet.py "
-                    f"--data_dir {self.data_dir}'."
-                )
-            logger.info(
-                "DomainNet not found at %s; downloading (download=True).",
-                domain_dir,
-            )
-            prepare_domainnet(self.data_dir)
-
-        train_ds = torchvision.datasets.ImageFolder(
-            root=str(domain_dir / "train"), transform=train_tf,
-        )
-        test_ds = torchvision.datasets.ImageFolder(
-            root=str(domain_dir / "test"), transform=test_tf,
-        )
-        return train_ds, test_ds
 
     def _load_inaturalist(
         self, train_tf: T.Compose, test_tf: T.Compose,

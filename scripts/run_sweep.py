@@ -8,7 +8,7 @@ Usage:
     python scripts/run_sweep.py --experiment core_factorial
     python scripts/run_sweep.py --experiment extended_grid
     python scripts/run_sweep.py --experiment pout_sweep
-    python scripts/run_sweep.py --experiment pout_sweep_domainnet --resume
+    python scripts/run_sweep.py --experiment pout_sweep_domainnet126 --resume
 """
 
 from __future__ import annotations

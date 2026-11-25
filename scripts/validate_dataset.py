@@ -6,8 +6,8 @@ prints statistics about the data, and saves sample images.
 
 Usage
 -----
-    # Validate DomainNet
-    python scripts/validate_dataset.py --dataset domainnet --data_dir data/domainnet
+    # Validate DomainNet-126 (local folder; never downloaded)
+    python scripts/validate_dataset.py --dataset domainnet126 --data_dir data/DomainNet-126
 
     # Validate CIFAR-100 with sample images
     python scripts/validate_dataset.py --dataset cifar100 --output_dir outputs/samples
@@ -33,14 +33,15 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--dataset", type=str, default="domainnet",
-        help="Dataset to validate (default: domainnet).",
-        choices=["cifar100", "cifar10", "emnist", "domainnet", "inaturalist",
+        "--dataset", type=str, default="domainnet126",
+        help="Dataset to validate (default: domainnet126).",
+        choices=["cifar100", "cifar10", "emnist", "domainnet126", "inaturalist",
                  "pathmnist", "speech_commands"],
     )
     parser.add_argument(
         "--data_dir", type=str, default=None,
-        help="Data directory (default: data/<dataset>).",
+        help="Data directory (default: data/<dataset>; "
+             "data/DomainNet-126 for domainnet126).",
     )
     parser.add_argument(
         "--output_dir", type=str, default=None,
@@ -59,7 +60,10 @@ def main() -> None:
 
     # Infer data_dir if not provided
     if args.data_dir is None:
-        args.data_dir = f"data/{args.dataset}"
+        if args.dataset == "domainnet126":
+            args.data_dir = "data/DomainNet-126"
+        else:
+            args.data_dir = f"data/{args.dataset}"
 
     print(f"\n🔄 Loading {args.dataset}...")
     print(f"   Data directory: {args.data_dir}")
@@ -81,8 +85,6 @@ def main() -> None:
 
     except FileNotFoundError as e:
         print(f"\n❌ ERROR: {e}")
-        print("\nFor DomainNet, run:")
-        print(f"  python scripts/prepare_domainnet.py --data_dir {args.data_dir}")
         return 1
     except Exception as e:
         print(f"\n❌ ERROR: {type(e).__name__}: {e}")
