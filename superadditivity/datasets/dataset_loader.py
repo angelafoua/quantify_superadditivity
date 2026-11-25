@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 import torchvision
 import torchvision.transforms as T
 
+from superadditivity.datasets.domainnet_prep import is_prepared, prepare_domainnet
 from superadditivity.utils.seed import PROBE_SEED, seed_worker
 
 logger = logging.getLogger(__name__)
@@ -450,35 +451,36 @@ class DatasetLoader:
     ) -> Tuple[Dataset, Dataset]:
         """Load DomainNet (clipart domain for tractability).
 
-        Uses torchvision ImageFolder on downloaded/extracted data.
-        Raises FileNotFoundError if the data directory is missing —
-        run ``scripts/prepare_domainnet.py`` first.
+        Uses torchvision ImageFolder on ``<data_dir>/clipart/{train,test}``.
+
+        If that directory is missing or incomplete and ``download=True``, the
+        data is downloaded and organised first (see
+        :func:`superadditivity.datasets.domainnet_prep.prepare_domainnet`).
+        With ``download=False`` a FileNotFoundError is raised instead.
         """
         domain_dir = self.data_dir / "clipart"
-        if domain_dir.exists():
-            for split in ("train", "test"):
-                split_dir = domain_dir / split
-                if not any(p.is_dir() for p in split_dir.glob("*")):
-                    raise FileNotFoundError(
-                        f"DomainNet split directory {split_dir} has no class "
-                        f"folders (incomplete or failed preparation). Delete "
-                        f"{domain_dir} and re-run 'python "
-                        f"scripts/prepare_domainnet.py --data_dir "
-                        f"{self.data_dir}'."
-                    )
-            train_ds = torchvision.datasets.ImageFolder(
-                root=str(domain_dir / "train"), transform=train_tf,
+        if not is_prepared(self.data_dir):
+            if not self.download:
+                raise FileNotFoundError(
+                    f"DomainNet clipart data not found or incomplete at "
+                    f"{domain_dir} (expected class folders under train/ and "
+                    f"test/). Use download=True (config: data.download: true) "
+                    f"or run 'python scripts/prepare_domainnet.py "
+                    f"--data_dir {self.data_dir}'."
+                )
+            logger.info(
+                "DomainNet not found at %s; downloading (download=True).",
+                domain_dir,
             )
-            test_ds = torchvision.datasets.ImageFolder(
-                root=str(domain_dir / "test"), transform=test_tf,
-            )
-            return train_ds, test_ds
+            prepare_domainnet(self.data_dir)
 
-        raise FileNotFoundError(
-            f"DomainNet clipart directory not found at {domain_dir}. "
-            f"Run 'python scripts/prepare_domainnet.py --data_dir {self.data_dir}' "
-            f"to download and organise the dataset before training."
+        train_ds = torchvision.datasets.ImageFolder(
+            root=str(domain_dir / "train"), transform=train_tf,
         )
+        test_ds = torchvision.datasets.ImageFolder(
+            root=str(domain_dir / "test"), transform=test_tf,
+        )
+        return train_ds, test_ds
 
     def _load_inaturalist(
         self, train_tf: T.Compose, test_tf: T.Compose,

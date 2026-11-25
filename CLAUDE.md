@@ -36,6 +36,7 @@ else is library code under `superadditivity/`.
 |---------|----------|
 | Seeding / reproducibility | `superadditivity/utils/seed.py` |
 | Multi-dataset loading | `superadditivity/datasets/dataset_loader.py` |
+| DomainNet download/organise (used by `download=True` and `scripts/prepare_domainnet.py`) | `superadditivity/datasets/domainnet_prep.py` |
 | Non-IID partitioning | `superadditivity/datasets/semantic_partitioner.py` |
 | Quantity-skew partitioning | `superadditivity/datasets/quantity_skew_partitioner.py` |
 | Per-client dataset | `superadditivity/datasets/client_dataset.py` |
