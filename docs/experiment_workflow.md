@@ -86,8 +86,9 @@ graph_seed: 100
 ### Data configs
 
 Seven datasets are supported: **CIFAR-100** (primary), **CIFAR-10**,
-**Federated EMNIST**, **DomainNet** (clipart), **iNaturalist** (200-class
-subset), **PathMNIST**, and **Google Speech Commands**. The full registry lives
+**Federated EMNIST**, **DomainNet-126** (clipart, 126 classes, loaded from a
+local `DomainNet-126` folder at `data/DomainNet-126`; never downloaded),
+**iNaturalist** (200-class subset), **PathMNIST**, and **Google Speech Commands**. The full registry lives
 in [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/dataset_loader.py).
 
 **CIFAR-100 (primary):**
@@ -112,10 +113,10 @@ in [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/da
 | [`configs/data/emnist_mild_noniid.yaml`](../configs/data/emnist_mild_noniid.yaml) | `dirichlet` | Federated EMNIST, mild Non-IID |
 | [`configs/data/emnist_noniid.yaml`](../configs/data/emnist_noniid.yaml) | `dirichlet` | Federated EMNIST, moderate Non-IID |
 | [`configs/data/emnist_severe_noniid.yaml`](../configs/data/emnist_severe_noniid.yaml) | `dirichlet` | Federated EMNIST, severe Non-IID |
-| [`configs/data/domainnet_iid.yaml`](../configs/data/domainnet_iid.yaml) | `iid` | DomainNet (clipart), IID |
-| [`configs/data/domainnet_mild_noniid.yaml`](../configs/data/domainnet_mild_noniid.yaml) | `dirichlet` | DomainNet, mild Non-IID |
-| [`configs/data/domainnet_noniid.yaml`](../configs/data/domainnet_noniid.yaml) | `dirichlet` | DomainNet, moderate Non-IID |
-| [`configs/data/domainnet_severe_noniid.yaml`](../configs/data/domainnet_severe_noniid.yaml) | `dirichlet` | DomainNet, severe Non-IID |
+| [`configs/data/domainnet126_iid.yaml`](../configs/data/domainnet126_iid.yaml) | `iid` | DomainNet-126 (clipart), IID |
+| [`configs/data/domainnet126_mild_noniid.yaml`](../configs/data/domainnet126_mild_noniid.yaml) | `dirichlet` | DomainNet-126, mild Non-IID |
+| [`configs/data/domainnet126_noniid.yaml`](../configs/data/domainnet126_noniid.yaml) | `dirichlet` | DomainNet-126, moderate Non-IID |
+| [`configs/data/domainnet126_severe_noniid.yaml`](../configs/data/domainnet126_severe_noniid.yaml) | `dirichlet` | DomainNet-126, severe Non-IID |
 | [`configs/data/inaturalist_iid.yaml`](../configs/data/inaturalist_iid.yaml) | `iid` | iNaturalist (200-class subset), IID |
 | [`configs/data/inaturalist_noniid.yaml`](../configs/data/inaturalist_noniid.yaml) | `dirichlet` | iNaturalist, Non-IID |
 | [`configs/data/pathmnist_iid.yaml`](../configs/data/pathmnist_iid.yaml) | `iid` | PathMNIST, IID |
@@ -174,7 +175,7 @@ The `run()` function executes these steps in order:
 
 1. **Seed everything** — calls `set_all_seeds(run_seed)` from [`superadditivity/utils/seed.py`](../superadditivity/utils/seed.py). The probe set is always seeded with the fixed constant `PROBE_SEED=999`, independent of `run_seed`.
 
-2. **Load dataset** — [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/dataset_loader.py) downloads/caches one of the seven supported datasets (CIFAR-100, CIFAR-10, EMNIST, DomainNet, iNaturalist, PathMNIST, Speech Commands) and exposes `get_semantic_clusters()` and `get_probe_set()`.
+2. **Load dataset** — [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/dataset_loader.py) downloads/caches one of the seven supported datasets (CIFAR-100, CIFAR-10, EMNIST, DomainNet-126, iNaturalist, PathMNIST, Speech Commands) and exposes `get_semantic_clusters()` and `get_probe_set()`.
 
 3. **Build graph** — [`superadditivity/graphs/graph_manager.py`](../superadditivity/graphs/graph_manager.py) constructs the adjacency graph via the appropriate generator:
    - [`superadditivity/graphs/sbm_generator.py`](../superadditivity/graphs/sbm_generator.py) — Stochastic Block Model
@@ -265,7 +266,7 @@ python scripts/run_sweep.py --experiment robustness_check
 | [`pout_sweep_cifar10.yaml`](../configs/experiment/pout_sweep_cifar10.yaml) | p_out sweep on CIFAR-10 |
 | [`pout_sweep_emnist.yaml`](../configs/experiment/pout_sweep_emnist.yaml) | p_out sweep on Federated EMNIST |
 | [`pout_sweep_pathmnist.yaml`](../configs/experiment/pout_sweep_pathmnist.yaml) | p_out sweep on PathMNIST |
-| [`pout_sweep_domainnet.yaml`](../configs/experiment/pout_sweep_domainnet.yaml) | p_out sweep on DomainNet |
+| [`pout_sweep_domainnet126.yaml`](../configs/experiment/pout_sweep_domainnet126.yaml) | p_out sweep on DomainNet-126 (clipart) |
 | [`robustness_check.yaml`](../configs/experiment/robustness_check.yaml) | Alternative datasets (CIFAR-10, EMNIST), models (ConvNet), heterogeneity (quantity skew), and topologies (Watts-Strogatz) |
 
 Any experiment whose name starts with `pout_sweep` (e.g. `pout_sweep_cifar10`)

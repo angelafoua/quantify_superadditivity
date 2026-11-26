@@ -36,7 +36,7 @@ else is library code under `superadditivity/`.
 |---------|----------|
 | Seeding / reproducibility | `superadditivity/utils/seed.py` |
 | Multi-dataset loading | `superadditivity/datasets/dataset_loader.py` |
-| DomainNet download/organise (used by `download=True` and `scripts/prepare_domainnet.py`) | `superadditivity/datasets/domainnet_prep.py` |
+| DomainNet-126 (local list-based loader) | `superadditivity/datasets/domainnet126.py` |
 | Non-IID partitioning | `superadditivity/datasets/semantic_partitioner.py` |
 | Quantity-skew partitioning | `superadditivity/datasets/quantity_skew_partitioner.py` |
 | Per-client dataset | `superadditivity/datasets/client_dataset.py` |
@@ -56,7 +56,7 @@ else is library code under `superadditivity/`.
 - **CIFAR-100** (primary) — 100 classes, 32×32 RGB, 4 semantic clusters
 - **CIFAR-10** — 10 classes, 32×32 RGB, 2 semantic clusters
 - **Federated EMNIST** — 62 classes, 32×32 grayscale, 3 semantic clusters
-- **DomainNet** (clipart) — 345 classes, 64×64 RGB, 4 semantic clusters
+- **DomainNet-126** (clipart) — 126 classes, 64×64 RGB, 4 alphabetical clusters, local data at `data/DomainNet-126`
 - **iNaturalist** (200-class subset) — 200 classes, 64×64 RGB, 4 semantic clusters
 - **PathMNIST** — 9 classes, 32×32 RGB, 3 semantic clusters
 - **Google Speech Commands** — 35 classes, 64×64 mel-spectrogram (1ch), 4 semantic clusters
