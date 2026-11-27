@@ -703,3 +703,107 @@ class TestInterruptedFinalWrites:
         run_dir.mkdir(parents=True)
         save_json({"total_rounds": 500}, run_dir / "summary.json")
         assert not _is_complete(cfg)
+
+
+# ------------------------------------------------------------------ #
+# Cross-run isolation within one sweep process
+# ------------------------------------------------------------------ #
+
+class TestCrossRunIsolation:
+    """State from one run must not leak into the next run of a sweep."""
+
+    def test_drift_tracker_save_drops_stale_keys(self, tmp_path):
+        """Re-saving into an existing file must not keep keys from a prior run."""
+        import h5py
+
+        path = tmp_path / "drift_metrics.h5"
+
+        old = DriftTracker(output_path=str(path))
+        old.record(0, {"old_metric": 1.0})
+        old.record_embeddings(7, {"layer4": {0: np.zeros((2, 3))}})
+        old.save()
+
+        new = DriftTracker(output_path=str(path))
+        new.record(0, {"new_metric": 2.0})
+        new.save()
+
+        with h5py.File(path, "r") as fh:
+            assert set(fh["metrics"].keys()) == {"new_metric"}
+            assert "embeddings" not in fh
+            assert fh["metadata"].attrs["metric_keys"] == "new_metric"
+        assert not path.with_name(path.name + ".tmp").exists()
+
+    def test_run_log_follows_each_run(self, tmp_path):
+        """Each run's log goes to its own run.log; handlers do not accumulate."""
+        import logging
+
+        from scripts.run_experiment import _attach_run_log
+
+        root = logging.getLogger()
+        n_before = len(root.handlers)
+        test_logger = logging.getLogger("test_cross_run")
+
+        for name in ("run_a", "run_b"):
+            run_dir = tmp_path / name
+            run_dir.mkdir()
+            handler = _attach_run_log(run_dir / "run.log")
+            try:
+                test_logger.warning("message from %s", name)
+            finally:
+                root.removeHandler(handler)
+                handler.close()
+
+        assert len(root.handlers) == n_before
+        log_a = (tmp_path / "run_a" / "run.log").read_text()
+        log_b = (tmp_path / "run_b" / "run.log").read_text()
+        assert "message from run_a" in log_a and "run_b" not in log_a
+        assert "message from run_b" in log_b and "run_a" not in log_b
+
+    def test_failed_run_detaches_log_handler(self, tmp_path):
+        """A run that raises must still remove its run.log handler."""
+        import logging
+
+        from omegaconf import OmegaConf
+        from scripts.run_experiment import run
+
+        cfg = OmegaConf.create({
+            "output_dir": str(tmp_path), "run_seed": 1, "graph_seed": 2,
+            "experiment_name": "x", "n_clients": 3, "n_communities": 2,
+        })
+        root = logging.getLogger()
+        n_before = len(root.handlers)
+        with pytest.raises(ValueError, match="multiple of"):
+            run(cfg)
+        assert len(root.handlers) == n_before
+        assert (tmp_path / "seed_1_graph_2" / "run.log").exists()
+
+    def test_robustness_cells_get_distinct_run_dirs(self):
+        """Every (data, network) cell of a robustness check has its own dir."""
+        from omegaconf import OmegaConf
+        from scripts.run_sweep import (
+            _build_config,
+            _robustness_experiment_name,
+            _run_dir,
+        )
+
+        exp = OmegaConf.to_container(
+            OmegaConf.load(
+                Path(__file__).resolve().parent.parent
+                / "configs" / "experiment" / "robustness_check.yaml"
+            ),
+            resolve=True,
+        )
+        check_name, check = next(iter(exp["checks"].items()))
+        dirs = set()
+        for data_level in check["data_levels"]:
+            for network_level in check["network_levels"]:
+                cfg = _build_config([
+                    f"data={data_level}",
+                    f"graph={network_level}",
+                    f"model={check['model']}",
+                    "experiment_name=" + _robustness_experiment_name(
+                        check_name, data_level, network_level
+                    ),
+                ])
+                dirs.add(_run_dir(cfg))
+        assert len(dirs) == len(check["data_levels"]) * len(check["network_levels"])

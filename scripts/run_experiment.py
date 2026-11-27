@@ -135,26 +135,55 @@ def _build_client_id_to_community(
     return result
 
 
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+
+def _attach_run_log(log_path: Path) -> logging.FileHandler:
+    """Attach a run-specific file handler to the root logger.
+
+    ``logging.basicConfig`` is a no-op once the root logger has handlers, so
+    in a multi-run sweep it cannot redirect ``run.log`` to each new run
+    directory. Instead, a dedicated handler is attached per run and removed
+    by the caller when the run ends.
+    """
+    # Console handler + INFO level (no-op if logging is already configured,
+    # e.g. by run_sweep.py or Hydra).
+    logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+    root = logging.getLogger()
+    handler = logging.FileHandler(log_path, mode="a")
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    root.addHandler(handler)
+    return handler
+
+
 def run(cfg: DictConfig) -> dict:
     """Execute a single experiment run.
 
     If a resume checkpoint exists and is compatible with the current config,
     training resumes from the saved round instead of restarting.
+
+    Logging for this run is written to ``<output_dir>/run.log``; the file
+    handler is detached when the run finishes (or fails), so consecutive runs
+    in one process never write into each other's logs.
     """
     t_start = time.time()
-    run_seed = cfg.run_seed
-    graph_seed = cfg.graph_seed
-    output_dir = Path(cfg.output_dir) / f"seed_{run_seed}_graph_{graph_seed}"
+    output_dir = (
+        Path(cfg.output_dir) / f"seed_{cfg.run_seed}_graph_{cfg.graph_seed}"
+    )
     ensure_dir(output_dir)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(output_dir / "run.log"),
-        ],
-    )
+    file_handler = _attach_run_log(output_dir / "run.log")
+    try:
+        return _execute(cfg, output_dir, t_start)
+    finally:
+        logging.getLogger().removeHandler(file_handler)
+        file_handler.close()
+
+
+def _execute(cfg: DictConfig, output_dir: Path, t_start: float) -> dict:
+    """Run body for :func:`run` (see its docstring)."""
+    run_seed = cfg.run_seed
+    graph_seed = cfg.graph_seed
 
     logger.info("=" * 60)
     logger.info("Starting experiment: %s", cfg.experiment_name)

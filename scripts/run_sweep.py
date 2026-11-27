@@ -131,6 +131,30 @@ class SweepFailedError(Exception):
     """Raised when an experiment in a sweep fails, stopping the sweep."""
 
 
+def _release_memory() -> None:
+    """Free host and accelerator memory held by the previous run.
+
+    Client models, optimizer states and datasets become garbage when ``run``
+    returns, but reference cycles (and, on failure, the traceback's frames)
+    can keep them alive. Collecting explicitly and emptying the CUDA/MPS
+    caching allocators keeps memory flat across a multi-dataset sweep.
+    """
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    mps = getattr(torch, "mps", None)
+    if (
+        mps is not None
+        and getattr(torch.backends, "mps", None) is not None
+        and torch.backends.mps.is_available()
+    ):
+        mps.empty_cache()
+
+
 def _run_single(run_cfg: "DictConfig", label: str) -> None:
     """Run a single experiment, converting any failure to a SweepFailedError."""
     from scripts.run_experiment import run
@@ -139,9 +163,16 @@ def _run_single(run_cfg: "DictConfig", label: str) -> None:
         run(run_cfg)
     except Exception as exc:
         _write_error_log(run_cfg, label, exc)
-        raise SweepFailedError(
+        # Raise without chaining the original exception: its traceback pins
+        # the failed run's frames (clients, models, GPU tensors) in memory.
+        # The full traceback is already persisted in error.json.
+        err = SweepFailedError(
             f"Experiment failed: {label} — {type(exc).__name__}: {exc}"
-        ) from exc
+        )
+        del exc
+        _release_memory()
+        raise err from None
+    _release_memory()
 
 
 def run_core_factorial(cfg: dict, resume: bool = False) -> None:
@@ -265,6 +296,18 @@ def run_pout_sweep(cfg: dict, resume: bool = False) -> None:
     )
 
 
+def _robustness_experiment_name(
+    check_name: str, data_level: str, network_level: str
+) -> str:
+    """Return the experiment name for one cell of a robustness check.
+
+    Each (data, network) cell must map to its own output directory;
+    otherwise all cells of a check share ``seed_<rs>_graph_<gs>/`` and
+    overwrite each other's results.
+    """
+    return f"robustness_{check_name}/{data_level}_{network_level}"
+
+
 def _build_config(overrides: list) -> "DictConfig":
     """Build a Hydra config from overrides."""
     from hydra import compose, initialize_config_dir
@@ -329,7 +372,10 @@ def main() -> None:
                                     f"training={cfg['training']}",
                                     f"run_seed={run_seed}",
                                     f"graph_seed={graph_seed}",
-                                    f"experiment_name=robustness_{check_name}",
+                                    "experiment_name="
+                                    + _robustness_experiment_name(
+                                        check_name, data_level, network_level
+                                    ),
                                 ]
                                 run_cfg = _build_config(overrides)
                                 status = _run_status(run_cfg) if args.resume else "new"

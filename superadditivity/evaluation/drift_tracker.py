@@ -189,8 +189,18 @@ class DriftTracker:
             raise ValueError(
                 "No path provided and no output_path set at construction time."
             )
-        path = resolved
-        logger.info("Saving drift tracker to %s", path)
+        final_path = Path(resolved)
+        logger.info("Saving drift tracker to %s", final_path)
+
+        # Write to a fresh temporary file, then atomically replace the target.
+        # The writers below open HDF5 in append mode, so writing in place
+        # would keep stale keys (e.g. embedding rounds or metrics) left by an
+        # earlier run that used the same output directory. The tracker holds
+        # the complete state (restored from the resume checkpoint on resume),
+        # so a full rewrite loses nothing.
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        path = final_path.with_name(final_path.name + ".tmp")
+        path.unlink(missing_ok=True)
 
         # Save scalar / array metrics
         for key in sorted(self._recorded_keys):
@@ -228,9 +238,11 @@ class DriftTracker:
             },
         )
 
+        path.replace(final_path)
+
         logger.info(
             "Saved %d metrics and %d embedding snapshots to %s",
             len(self._recorded_keys),
             len(self._embeddings),
-            path,
+            final_path,
         )
