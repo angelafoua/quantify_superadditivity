@@ -214,6 +214,14 @@ DATASET_SPECS: Dict[str, DatasetSpec] = {
 _SUPPORTED_DATASETS = frozenset(DATASET_SPECS.keys())
 
 
+def _squeeze_target(target) -> int:
+    """MedMNIST yields labels as shape-(1,) arrays; return a scalar int.
+
+    Module-level (not a lambda) so it stays picklable for DataLoader workers.
+    """
+    return int(np.asarray(target).reshape(-1)[0])
+
+
 class DatasetLoader:
     """Unified loader for all supported datasets.
 
@@ -502,10 +510,12 @@ class DatasetLoader:
 
         train_ds = PathMNISTClass(
             split="train", transform=train_tf,
+            target_transform=_squeeze_target,
             download=self.download, root=str(self.data_dir),
         )
         test_ds = PathMNISTClass(
             split="test", transform=test_tf,
+            target_transform=_squeeze_target,
             download=self.download, root=str(self.data_dir),
         )
         # MedMNIST uses .labels instead of .targets; add targets attr
