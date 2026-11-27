@@ -27,6 +27,11 @@ import torchvision.transforms as T
 from superadditivity.datasets.domainnet126 import build_domainnet126
 from superadditivity.utils.seed import PROBE_SEED, seed_worker
 
+
+def _medmnist_scalar_label(target: Any) -> int:
+    """Flatten a MedMNIST label of shape (1,) to a Python int (picklable)."""
+    return int(np.asarray(target).reshape(-1)[0])
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -500,12 +505,16 @@ class DatasetLoader:
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
+        # MedMNIST labels are arrays of shape (1,); flatten to a scalar int so
+        # batches are (B,) as required by CrossEntropyLoss.
         train_ds = PathMNISTClass(
             split="train", transform=train_tf,
+            target_transform=_medmnist_scalar_label,
             download=self.download, root=str(self.data_dir),
         )
         test_ds = PathMNISTClass(
             split="test", transform=test_tf,
+            target_transform=_medmnist_scalar_label,
             download=self.download, root=str(self.data_dir),
         )
         # MedMNIST uses .labels instead of .targets; add targets attr
