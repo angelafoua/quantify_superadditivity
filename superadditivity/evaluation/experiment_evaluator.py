@@ -64,7 +64,8 @@ class ExperimentEvaluator:
     test_loader:
         Optional DataLoader for accuracy evaluation.
     primary_layer:
-        Layer name used for RSA/MMD/Fisher/Centroid metrics.
+        Layer name used for RSA, Fisher, centroid and legacy MMD metrics
+        (paired MMD uses ``paired_mmd_layers``).
     embedding_snapshot_rounds:
         If given, raw embeddings are stored at these round numbers.
     device:
