@@ -3,4 +3,6 @@ data_dir: data/speech_commands
 download: true
 partition_method: dirichlet_semantic
 dirichlet_alpha: 0.5
+between_community: dirichlet  # alpha controls between-community label skew; "disjoint" = legacy
+alpha_within: null  # null = IID split inside each community; a number = Dir(alpha_within) per class
 n_classes: 35

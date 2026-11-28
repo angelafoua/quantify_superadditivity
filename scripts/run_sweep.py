@@ -21,7 +21,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from typing import TYPE_CHECKING
+
 from omegaconf import OmegaConf
+
+if TYPE_CHECKING:
+    from omegaconf import DictConfig
 
 from superadditivity.logging.checkpoint_manager import _config_hash
 from superadditivity.utils.io import load_json, save_json, ensure_dir
@@ -310,7 +315,6 @@ def main() -> None:
             run_pout_sweep(cfg, resume=args.resume)
         elif args.experiment == "robustness_check":
             logger.info("Robustness check: running each sub-experiment...")
-            from scripts.run_experiment import run as run_experiment
 
             for check_name, check_cfg in cfg["checks"].items():
                 logger.info("Sub-experiment: %s", check_name)

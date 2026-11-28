@@ -13,10 +13,9 @@ cluster definitions). Nothing is hardcoded outside these specs.
 from __future__ import annotations
 
 import logging
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -498,7 +497,6 @@ class DatasetLoader:
         Raises ImportError if the medmnist package is not installed.
         """
         try:
-            import medmnist
             from medmnist import PathMNIST as PathMNISTClass
         except ImportError:
             raise ImportError(
@@ -791,7 +789,7 @@ class DatasetLoader:
         # ---- Basic Statistics ----
         n_train = len(self._train_dataset)
         n_test = len(self._test_dataset)
-        print(f"\n📊 Dataset Size:")
+        print("\n📊 Dataset Size:")
         print(f"   Train samples: {n_train:,}")
         print(f"   Test samples:  {n_test:,}")
         print(f"   Total:         {n_train + n_test:,}")
@@ -803,14 +801,14 @@ class DatasetLoader:
         unique_train_classes = np.unique(train_targets)
         unique_test_classes = np.unique(test_targets)
 
-        print(f"\n🏷️  Class Information:")
+        print("\n🏷️  Class Information:")
         print(f"   Train classes: {len(unique_train_classes)}")
         print(f"   Test classes:  {len(unique_test_classes)}")
         print(f"   Expected:      {self.spec.num_classes}")
 
         # Class distribution in train set
         train_class_counts = np.bincount(train_targets)
-        print(f"\n   Train class distribution:")
+        print("\n   Train class distribution:")
         print(f"      Min samples/class:  {train_class_counts.min()}")
         print(f"      Max samples/class:  {train_class_counts.max()}")
         print(f"      Mean samples/class: {train_class_counts.mean():.1f}")
@@ -818,20 +816,20 @@ class DatasetLoader:
 
         # Class distribution in test set
         test_class_counts = np.bincount(test_targets)
-        print(f"\n   Test class distribution:")
+        print("\n   Test class distribution:")
         print(f"      Min samples/class:  {test_class_counts.min()}")
         print(f"      Max samples/class:  {test_class_counts.max()}")
         print(f"      Mean samples/class: {test_class_counts.mean():.1f}")
 
         # ---- Image Metadata ----
-        print(f"\n🖼️  Image Metadata:")
+        print("\n🖼️  Image Metadata:")
         print(f"   Size:        {self.spec.image_size}×{self.spec.image_size}")
         print(f"   Channels:    {self.spec.in_channels}")
         print(f"   Normalization mean: {self.spec.mean}")
         print(f"   Normalization std:  {self.spec.std}")
 
         # ---- Sample a batch to check shapes ----
-        print(f"\n🔍 Sample Batch (first 3 samples):")
+        print("\n🔍 Sample Batch (first 3 samples):")
         try:
             for i in range(min(3, len(self._train_dataset))):
                 sample = self._train_dataset[i]

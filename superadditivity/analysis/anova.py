@@ -67,10 +67,15 @@ def functional_anova(
     n_permutations: int = 10000,
     seed: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Permutation-based functional ANOVA for the interaction term.
+    """Permutation test for the interaction F (Freedman-Lane).
 
-    Permutes factor assignments to build a null distribution of the
-    interaction F-statistic. Reports permutation p-value.
+    Under ``H0: no interaction`` the main effects can still be non-zero,
+    so the raw responses are *not* exchangeable. Following Freedman & Lane
+    (1983), the residuals of the reduced model ``dv ~ A + B`` are permuted
+    and added back to its fitted values, and the interaction F of the full
+    model ``dv ~ A * B`` is recomputed:
+
+    ``F = ((RSS_reduced - RSS_full) / df_int) / (RSS_full / df_resid)``.
 
     Parameters
     ----------
@@ -87,40 +92,59 @@ def functional_anova(
 
     Returns
     -------
-    dict with ``"observed_F"``, ``"perm_p_value"``, ``"null_distribution"``.
+    dict with ``"observed_F"``, ``"perm_p_value"`` (``(count + 1) /
+    (n_permutations + 1)``, so never 0), ``"null_distribution"`` and
+    ``"method"``.
     """
-    from statsmodels.formula.api import ols
-    import statsmodels.api as sm
+    import patsy
 
-    formula = f"{dv} ~ C({factor_a}) * C({factor_b})"
-    model = ols(formula, data=df).fit()
-    anova_table = sm.stats.anova_lm(model, typ=2)
+    y = df[dv].to_numpy(dtype=np.float64)
+    X_full = np.asarray(patsy.dmatrix(f"C({factor_a}) * C({factor_b})", df))
+    X_red = np.asarray(patsy.dmatrix(f"C({factor_a}) + C({factor_b})", df))
+    n = len(y)
+    rank_full = np.linalg.matrix_rank(X_full)
+    rank_red = np.linalg.matrix_rank(X_red)
+    df_int = rank_full - rank_red
+    df_resid = n - rank_full
+    if df_int <= 0 or df_resid <= 0:
+        raise ValueError(
+            f"Cannot test the interaction: df_int={df_int}, df_resid={df_resid}"
+        )
 
-    interaction_key = f"C({factor_a}):C({factor_b})"
-    observed_F = float(anova_table.loc[interaction_key, "F"])
+    def residual_maker(X: np.ndarray) -> np.ndarray:
+        return np.eye(n) - X @ np.linalg.pinv(X)
 
+    M_full = residual_maker(X_full)
+    M_red = residual_maker(X_red)
+
+    def f_stats(Y: np.ndarray) -> np.ndarray:
+        rss_full = np.einsum("ij,ij->j", M_full @ Y, M_full @ Y)
+        rss_red = np.einsum("ij,ij->j", M_red @ Y, M_red @ Y)
+        return ((rss_red - rss_full) / df_int) / (rss_full / df_resid)
+
+    observed_F = float(f_stats(y[:, None])[0])
+
+    fitted_red = y - M_red @ y
+    resid_red = M_red @ y
     rng = np.random.RandomState(seed)
     null_Fs = np.empty(n_permutations)
+    batch = 1000
+    for start in range(0, n_permutations, batch):
+        k = min(batch, n_permutations - start)
+        perms = np.stack([rng.permutation(n) for _ in range(k)], axis=1)  # (n, k)
+        Y = fitted_red[:, None] + resid_red[perms]
+        null_Fs[start:start + k] = f_stats(Y)
 
-    for i in range(n_permutations):
-        df_perm = df.copy()
-        df_perm[dv] = rng.permutation(df_perm[dv].values)
-        try:
-            model_p = ols(formula, data=df_perm).fit()
-            table_p = sm.stats.anova_lm(model_p, typ=2)
-            null_Fs[i] = float(table_p.loc[interaction_key, "F"])
-        except Exception:
-            null_Fs[i] = 0.0
-
-    perm_p = float(np.mean(null_Fs >= observed_F))
-
+    count = int(np.sum(null_Fs >= observed_F - 1e-12 * abs(observed_F)))
+    perm_p = float((count + 1) / (n_permutations + 1))
     logger.info(
-        "Functional ANOVA: observed F=%.4f, permutation p=%.4g (%d perms)",
+        "Freedman-Lane permutation test: interaction F=%.4f, p=%.4g (%d perms)",
         observed_F, perm_p, n_permutations,
     )
-
     return {
         "observed_F": observed_F,
         "perm_p_value": perm_p,
         "null_distribution": null_Fs,
+        "n_permutations": n_permutations,
+        "method": "Freedman-Lane (permuted residuals of the main-effects model)",
     }

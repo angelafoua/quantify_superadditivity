@@ -17,7 +17,9 @@ The headline quantity is the **interaction term**:
 I = Drift(D) - Drift(B) - Drift(C) + Drift(A)
 ```
 where A/B/C/D are the four cells of a 2×2 factorial (IID/Non-IID × Dense/Community),
-and Drift is measured via layer-wise CKA on a fixed probe set.
+and Drift is measured via layer-wise CKA between clients on a fixed probe set
+(primary: 1 − mean CKA over client pairs in different communities; see
+`superadditivity/analysis/drift_metrics.py` for all analysable metrics).
 
 ## Mental model of the pipeline
 
@@ -45,6 +47,7 @@ else is library code under `superadditivity/`.
 | Training loop (D-SGD) | `superadditivity/training/dsgd_coordinator.py` |
 | Gossip mixing (critical!) | `superadditivity/communication/gossip_mixer.py` |
 | Drift metrics (CKA, RSA, MMD, Fisher, Centroid) | `superadditivity/evaluation/` |
+| Paired client-level MMD (reported MMD protocol) | `superadditivity/evaluation/paired_mmd_analyzer.py` |
 | Superadditivity analysis (I, bootstrap, surface fit) | `superadditivity/analysis/interaction_analyzer.py` |
 | Statistics (ANOVA, effect sizes, mixed-effects) | `superadditivity/analysis/` |
 | Figures | `superadditivity/visualization/` |
@@ -80,7 +83,11 @@ else is library code under `superadditivity/`.
 ## Data heterogeneity types
 
 - **IID** — uniform random assignment
-- **Dirichlet semantic** — label skew via Dirichlet(α) within semantic clusters
+- **Dirichlet semantic** — label skew via Dirichlet(α): each class is split across
+  communities by a sorted Dir(α) draw (largest share to its semantic-cluster home
+  community), then IID across the community's clients, so α controls only
+  between-community heterogeneity (`alpha_within` adds optional within-community
+  skew; `between_community: disjoint` = legacy split)
 - **Quantity skew** — IID labels but Dirichlet-skewed sample counts (negative control)
 
 ## Invariants that MUST hold (do not break these)
@@ -104,6 +111,13 @@ else is library code under `superadditivity/`.
   code — Hydra will not error on unused keys, so keep them in sync.
 - Tests must run on CPU without dataset downloads (use synthetic fixtures in
   `tests/conftest.py`).
+- BatchNorm running statistics stay local to each client unless
+  `training.mix_bn_buffers: true`; state this in any write-up.
+- The primary interaction test pairs runs by `run_seed`; experiments that
+  report I need at least 3 run seeds.
+- Analyses run on drift orientation (higher = more drift): similarity metrics
+  such as CKA enter as `1 - value`, so I > 0 means superadditive drift. Add new
+  analysable metrics in `superadditivity/analysis/drift_metrics.py`.
 
 ## Running things
 
@@ -132,9 +146,11 @@ python scripts/run_sweep.py --experiment robustness_check
 # Post-hoc analysis
 python scripts/run_analysis.py --results_dir outputs/core_factorial
 python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surface
+python scripts/run_analysis.py --results_dir outputs/core_factorial --metric mmd   # paired MMD
 
 # Generate figures
 python scripts/run_visualization.py --results_dir outputs/core_factorial
+python scripts/run_visualization.py --results_dir outputs/core_factorial --metric mmd
 ```
 
 ## Common extension points

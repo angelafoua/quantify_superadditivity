@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -51,7 +50,6 @@ def plot_topology(
     pos = nx.spring_layout(G, seed=42, k=1.5 / np.sqrt(G.number_of_nodes()))
 
     if community_assignments is not None:
-        n_communities = int(community_assignments.max()) + 1
         colors = [WONG_COLORS[community_assignments[i] % len(WONG_COLORS)]
                   for i in range(G.number_of_nodes())]
     else:

@@ -11,7 +11,7 @@ All extracted representations are returned in float64.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Sequence
 
 import numpy as np
 import torch
@@ -262,6 +262,32 @@ class RepresentationExtractor:
         """
         # Extract per-client first
         all_client_emb = self.extract(clients, probe_loader)
+        return self.average_by_community(all_client_emb, community_map)
+
+    def average_by_community(
+        self,
+        client_embeddings: Dict[str, Dict[int, np.ndarray]],
+        community_map: Dict[int, int],
+    ) -> Dict[str, Dict[int, np.ndarray]]:
+        """Average already-extracted client embeddings within each community.
+
+        Parameters
+        ----------
+        client_embeddings:
+            Output of :meth:`extract`: ``layer_name -> client_id ->
+            activations (n_probes, d)``.
+        community_map:
+            Mapping from client ID to community ID. Clients absent from
+            ``client_embeddings`` are ignored.
+
+        Returns
+        -------
+        Dict[str, Dict[int, np.ndarray]]
+            ``layer_name -> community_id -> averaged activations`` in float64.
+        """
+        present = set()
+        for layer_emb in client_embeddings.values():
+            present.update(layer_emb.keys())
 
         result: Dict[str, Dict[int, np.ndarray]] = {
             name: {} for name in self.layer_names
@@ -270,13 +296,13 @@ class RepresentationExtractor:
         # Group client IDs by community
         communities: Dict[int, List[int]] = {}
         for client_id, comm_id in community_map.items():
-            if client_id in clients:
+            if client_id in present:
                 communities.setdefault(comm_id, []).append(client_id)
 
         for name in self.layer_names:
             for comm_id, client_ids in sorted(communities.items()):
                 # Average across clients in this community
-                embs = [all_client_emb[name][cid] for cid in client_ids]
+                embs = [client_embeddings[name][cid] for cid in client_ids]
                 avg = np.mean(embs, axis=0).astype(np.float64)
                 result[name][comm_id] = avg
 

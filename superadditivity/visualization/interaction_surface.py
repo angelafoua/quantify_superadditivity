@@ -48,7 +48,7 @@ def plot_interaction_surface(
     unique_beta = np.unique(beta_values)
 
     I_grid = np.full((len(unique_alpha), len(unique_beta)), np.nan)
-    for a, b, I in zip(alpha_values, beta_values, I_values):
+    for a, b, I in zip(alpha_values, beta_values, I_values, strict=False):
         i = np.searchsorted(unique_alpha, a)
         j = np.searchsorted(unique_beta, b)
         if i < len(unique_alpha) and j < len(unique_beta):

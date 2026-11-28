@@ -56,7 +56,6 @@ class TestGossipMixer:
 
     def test_mixing_preserves_global_mean(self):
         """Mixing with a doubly-stochastic W preserves the global mean."""
-        n = 4
         W = torch.tensor([
             [0.5, 0.5, 0.0, 0.0],
             [0.5, 0.5, 0.0, 0.0],
@@ -103,3 +102,45 @@ class TestGossipMixer:
                 atol=1e-12,
                 err_msg=f"Client {i} running_mean was mixed (should be local)",
             )
+
+
+class TestBufferMixing:
+    """mix_buffers=True gossips BatchNorm running stats with the same W."""
+
+    @staticmethod
+    def _clients(n=3):
+        clients = []
+        for i in range(n):
+            model = nn.Sequential(nn.Conv2d(1, 4, 3, padding=1, bias=False), nn.BatchNorm2d(4))
+            with torch.no_grad():
+                model[1].running_mean.fill_(float(i * 10))
+                model[1].running_var.fill_(float(i + 1))
+                model[1].num_batches_tracked.fill_(i + 5)
+                model[0].weight.fill_(float(i))
+            clients.append(_FakeClient(model))
+        return clients
+
+    @pytest.mark.parametrize("path", ["in_place", "to_new_dicts"])
+    def test_float_buffers_mixed_integer_buffers_kept(self, path):
+        n = 3
+        W = torch.ones(n, n, dtype=torch.float64) / n
+        mixer = GossipMixer(mix_device="cpu", mix_buffers=True)
+        clients = self._clients(n)
+        if path == "in_place":
+            mixer.mix(clients, W)
+        else:
+            mixer._mix_to_new_dicts(clients, W, n)
+        for i, c in enumerate(clients):
+            np.testing.assert_allclose(c.model[1].running_mean.numpy(), 10.0)
+            np.testing.assert_allclose(c.model[1].running_var.numpy(), 2.0)
+            assert int(c.model[1].num_batches_tracked) == i + 5
+            np.testing.assert_allclose(c.model[0].weight.detach().numpy(), 1.0)
+
+    def test_default_path_to_new_dicts_keeps_buffers_local(self):
+        n = 3
+        W = torch.ones(n, n, dtype=torch.float64) / n
+        clients = self._clients(n)
+        GossipMixer(mix_device="cpu")._mix_to_new_dicts(clients, W, n)
+        for i, c in enumerate(clients):
+            np.testing.assert_allclose(c.model[1].running_mean.numpy(), float(i * 10))
+            np.testing.assert_allclose(c.model[0].weight.detach().numpy(), 1.0)

@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 import csv
 
@@ -54,6 +53,8 @@ class DSGDCoordinator:
     drift_tracker:
         Optional :class:`DriftTracker` whose state is saved in resume
         checkpoints so that drift metrics survive a restart.
+    mix_buffers:
+        Also gossip BatchNorm running statistics (see :class:`GossipMixer`).
     """
 
     def __init__(
@@ -70,10 +71,11 @@ class DSGDCoordinator:
         checkpoint_manager: Any = None,
         resume_manager: Any = None,
         drift_tracker: Any = None,
+        mix_buffers: bool = False,
     ) -> None:
         self.clients = clients
         self.n_clients = len(clients)
-        self.mixer = GossipMixer(mix_device="cpu")
+        self.mixer = GossipMixer(mix_device="cpu", mix_buffers=mix_buffers)
         self.W = torch.from_numpy(
             np.asarray(mixing_matrix, dtype=np.float64)
         )

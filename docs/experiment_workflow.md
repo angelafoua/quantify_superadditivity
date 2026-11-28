@@ -96,7 +96,7 @@ in [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/da
 | File | Partition method | Description |
 |------|-----------------|-------------|
 | [`configs/data/iid.yaml`](../configs/data/iid.yaml) | `iid` | Uniform random assignment |
-| [`configs/data/mild_noniid.yaml`](../configs/data/mild_noniid.yaml) | `dirichlet` | Dirichlet α=1.0 label skew |
+| [`configs/data/mild_noniid.yaml`](../configs/data/mild_noniid.yaml) | `dirichlet` | Dirichlet α=10 label skew |
 | [`configs/data/moderate_noniid.yaml`](../configs/data/moderate_noniid.yaml) | `dirichlet` | Dirichlet α=0.5 label skew |
 | [`configs/data/severe_noniid.yaml`](../configs/data/severe_noniid.yaml) | `dirichlet` | Dirichlet α=0.1 label skew |
 | [`configs/data/quantity_skew.yaml`](../configs/data/quantity_skew.yaml) | `quantity_skew` | IID labels, skewed sample counts (negative control) |
@@ -186,7 +186,7 @@ The `run()` function executes these steps in order:
    - [`superadditivity/graphs/graph_metrics.py`](../superadditivity/graphs/graph_metrics.py) — spectral gap, conductance, etc.
 
 4. **Partition data** — assigns training samples to the `n_clients` clients (16 by default):
-   - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew within semantic clusters (IID or non-IID modes)
+   - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew (IID or non-IID modes). With `between_community: dirichlet` (default), each class's samples are split across communities by a sorted `Dir(α)` draw whose largest shares go to the class's home community (its semantic cluster). Each community's samples are then split IID across its clients (equal sizes, same label mix), so α controls only how different the communities are. Each sample goes to exactly one client. Setting `alpha_within` adds a separate within-community skew, `Dir(alpha_within)` per class. Summaries record `community_label_tv` and `within_community_label_tv`, the mean total-variation distances between label distributions of communities and of clients within a community. `between_community: disjoint` reproduces the legacy split.
    - [`superadditivity/datasets/quantity_skew_partitioner.py`](../superadditivity/datasets/quantity_skew_partitioner.py) — IID labels with skewed sample counts
    - [`superadditivity/datasets/client_dataset.py`](../superadditivity/datasets/client_dataset.py) — wraps indices into per-client `Dataset` objects
 
@@ -212,7 +212,8 @@ The `run()` function executes these steps in order:
    - [`superadditivity/evaluation/representation_extractor.py`](../superadditivity/evaluation/representation_extractor.py) — extract layer activations on the probe set (float64)
    - [`superadditivity/evaluation/cka_analyzer.py`](../superadditivity/evaluation/cka_analyzer.py) — layer-wise CKA (primary drift metric)
    - [`superadditivity/evaluation/rsa_analyzer.py`](../superadditivity/evaluation/rsa_analyzer.py) — Representational Similarity Analysis
-   - [`superadditivity/evaluation/mmd_analyzer.py`](../superadditivity/evaluation/mmd_analyzer.py) — Maximum Mean Discrepancy
+   - [`superadditivity/evaluation/paired_mmd_analyzer.py`](../superadditivity/evaluation/paired_mmd_analyzer.py) — client-level paired MMD (between-minus-within community drift, bandwidth sensitivity; settings under `evaluation.paired_mmd` in `configs/config.yaml`)
+   - [`superadditivity/evaluation/mmd_analyzer.py`](../superadditivity/evaluation/mmd_analyzer.py) — legacy community-level MMD, off by default (`evaluation.legacy_community_mmd`), kept for comparison only
    - [`superadditivity/evaluation/fisher_analyzer.py`](../superadditivity/evaluation/fisher_analyzer.py) — Fisher divergence
    - [`superadditivity/evaluation/centroid_analyzer.py`](../superadditivity/evaluation/centroid_analyzer.py) — centroid distance
    - [`superadditivity/evaluation/drift_tracker.py`](../superadditivity/evaluation/drift_tracker.py) — accumulates metrics and writes to HDF5
@@ -291,7 +292,7 @@ The primary experiment tests superadditivity in a 2×2 design:
 **File:** [`scripts/run_analysis.py`](../scripts/run_analysis.py)
 
 ```bash
-# Factorial analysis (2×2 ANOVA + bootstrap interaction test)
+# Factorial analysis (2×2 ANOVA + seed-paired interaction test)
 python scripts/run_analysis.py --results_dir outputs/core_factorial
 
 # Interaction surface fit (for p_out sweep data)
@@ -299,26 +300,68 @@ python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surfa
 
 # Both
 python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis both
+
+# Same analyses on paired MMD instead of CKA (output: <results_dir>/analysis_mmd/)
+python scripts/run_analysis.py --results_dir outputs/core_factorial --metric mmd
+
+# Any summary column, e.g. an MMD bandwidth-sensitivity variant
+python scripts/run_analysis.py --results_dir outputs/core_factorial \
+    --metric final_mmd_paired_layer4_drift_bw0p5 --orientation distance
 ```
+
+**Statistics.**
+- *Primary I > 0 test:* runs that share `run_seed` share initial weights and the data partition in all four cells, so they're paired. Each seed's I is computed (averaging over graph seeds), then a one-sided t-test is run across seeds. An independent-cells bootstrap is reported as secondary.
+- *Interaction F:* tested with Freedman–Lane permutation (residuals of the main-effects model), which stays valid when main effects are present.
+- *Resampling p-values:* computed as (count + 1) / (B + 1) and reported as "< 1/B" at the floor.
+- *p_out surface:* IID runs are the reference level (α = ∞). Points on the reference row or column (I = 0 by construction) are excluded from the fit.
+
+**Scale robustness.** `--transform log|logit` applies a monotone transform to drift before the analysis (e.g. `--metric cka --transform logit`). An interaction can appear or vanish under such rescaling, so report the conclusion on more than one scale. Outputs go to `analysis_<metric>_<transform>/`.
+
+**Metrics (`--metric`).** All are primary-layer, client-level unless noted:
+
+| Name | Drift | Notes |
+|---|---|---|
+| `cka` (default) | 1 − mean CKA over client pairs in different communities | Primary; proposal's "CKA divergence between clients" |
+| `cka_bw` | (1 − CKA_between) − (1 − CKA_within) | Is drift aligned with the communities? |
+| `cka_community` | 1 − CKA between community-averaged embeddings | Legacy, for comparison with older runs |
+| `mmd` | Paired MMD² averaged over client pairs in different communities | Distribution-level, coordinate-sensitive |
+| `mmd_bw` | MMD² between − within communities | |
+| `<name>_window` | Same, averaged over the evaluations in the last `evaluation.summary_window_rounds` rounds | Less noisy than the final evaluation |
+
+Any other summary column can be analysed with `--metric <column> --orientation similarity|distance`.
+
+**Design checks.** A results folder must be a clean 2×2. Runs labelled with different `dirichlet_alpha` values (non-IID) or `p_out` values (community-structured) stop the analysis with an error instead of being pooled. Summaries record `p_in` / `p_out` for this.
+
+**Drift orientation.** Every analysis runs on *drift* (higher = more drift),
+so that I = Drift(D) − Drift(B) − Drift(C) + Drift(A) > 0 means superadditive
+drift. CKA is a similarity and is analysed as `1 − CKA` (CKA divergence); MMD
+is a distance and is used as is. Metrics are defined in
+[`drift_metrics.py`](../superadditivity/analysis/drift_metrics.py).
+
+**Factorial cells.** Runs are assigned to A/B/C/D from `data_regime`
+(`iid` vs any non-IID label) and `network_regime` (`erdos_renyi` = dense,
+`sbm`/`ring_of_cliques` = community). A results directory that is not exactly
+2×2 raises an error, and the interaction test is never skipped silently.
 
 **Analysis modules** (under [`superadditivity/analysis/`](../superadditivity/analysis/)):
 
 | File | Purpose |
 |------|---------|
 | [`aggregator.py`](../superadditivity/analysis/aggregator.py) | Load and aggregate `summary.json` files into a DataFrame |
-| [`anova.py`](../superadditivity/analysis/anova.py) | Two-way ANOVA and permutation ANOVA (10,000 permutations) |
-| [`interaction_analyzer.py`](../superadditivity/analysis/interaction_analyzer.py) | Bootstrap I>0 test (10,000 resamples), p_out sweep aggregation, surface fitting |
+| [`drift_metrics.py`](../superadditivity/analysis/drift_metrics.py) | Metrics selectable with `--metric`, drift orientation, factorial cell assignment |
+| [`anova.py`](../superadditivity/analysis/anova.py) | Two-way ANOVA and Freedman–Lane permutation test of the interaction F (10,000 permutations) |
+| [`interaction_analyzer.py`](../superadditivity/analysis/interaction_analyzer.py) | Seed-paired I > 0 test (primary), independent-cells bootstrap (secondary), p_out sweep I per point with CI, surface fitting |
 | [`effect_sizes.py`](../superadditivity/analysis/effect_sizes.py) | Bootstrap confidence intervals |
 | [`multiple_comparisons.py`](../superadditivity/analysis/multiple_comparisons.py) | Pairwise t-tests with correction |
-| [`mixed_effects.py`](../superadditivity/analysis/mixed_effects.py) | Linear mixed-effects model |
+| [`mixed_effects.py`](../superadditivity/analysis/mixed_effects.py) | Linear mixed-effects model, crossed random intercepts for `run_seed` and `graph_seed` |
 | [`statistical_report.py`](../superadditivity/analysis/statistical_report.py) | Generates a Markdown report |
 
-**Outputs** (written to `outputs/<experiment_name>/analysis/`):
+**Outputs** (written to `outputs/<experiment_name>/analysis/` for CKA, `analysis_<metric>/` otherwise):
 
 | File | Contents |
 |------|----------|
 | `statistical_report.md` | Full analysis report |
-| `interaction_test.json` | Bootstrap I estimate, CI, and p-value |
+| `interaction_test.json` | I with t CI and one-sided p from the seed-paired test, per-seed I values, bootstrap CI over seeds, the independent-cells bootstrap as secondary, metric/orientation/transform used, per-cell run counts and means |
 | `interaction_surface.json` | α/β grid values and surface fit parameters |
 | `surface_report.md` | Surface fit summary |
 
@@ -330,14 +373,23 @@ python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis both
 
 ```bash
 python scripts/run_visualization.py --results_dir outputs/core_factorial
+
+# Same figures for paired MMD (output: <results_dir>/figures_mmd/)
+python scripts/run_visualization.py --results_dir outputs/core_factorial --metric mmd
 ```
+
+Figures show drift (higher = more drift): CKA as `1 − CKA`, MMD as is, matching
+the analysis. `--metric` and `--orientation` work as in `run_analysis.py`, and
+`--layer` picks the trajectory layer (default `layer4`). Run `run_analysis.py`
+with the same `--metric` first so that the interaction bar chart can show the
+bootstrap CI and p-value. Without it the chart shows only I.
 
 **Visualization modules** (under [`superadditivity/visualization/`](../superadditivity/visualization/)):
 
 | File | Figure |
 |------|--------|
-| [`interaction_plots.py`](../superadditivity/visualization/interaction_plots.py) | 2×2 factorial grid showing drift per cell |
-| [`drift_trajectories.py`](../superadditivity/visualization/drift_trajectories.py) | CKA drift over training rounds |
+| [`interaction_plots.py`](../superadditivity/visualization/interaction_plots.py) | Factorial grid of mean drift; 2×2 bar chart with additive prediction and I |
+| [`drift_trajectories.py`](../superadditivity/visualization/drift_trajectories.py) | Drift over training rounds, per factorial cell |
 | [`interaction_surface.py`](../superadditivity/visualization/interaction_surface.py) | 3-D surface of I(α,β) |
 | [`cka_heatmaps.py`](../superadditivity/visualization/cka_heatmaps.py) | Layer-wise CKA heatmaps |
 | [`topology_plots.py`](../superadditivity/visualization/topology_plots.py) | Graph topology diagrams |
@@ -345,13 +397,14 @@ python scripts/run_visualization.py --results_dir outputs/core_factorial
 | [`pout_sweep_plots.py`](../superadditivity/visualization/pout_sweep_plots.py) | I vs p_out line plots |
 | [`figure_style.py`](../superadditivity/visualization/figure_style.py) | Publication-quality matplotlib style |
 
-**Outputs** (written to `outputs/<experiment_name>/figures/`):
+**Outputs** (written to `outputs/<experiment_name>/figures/` for CKA, `figures_<metric>/` otherwise):
 
 | File | Contents |
 |------|----------|
-| `factorial_grid.pdf` | Main 2×2 interaction figure |
-| `drift_trajectories.pdf` | Per-condition drift curves |
-| `interaction_surface.pdf` | I(α,β) surface (if surface data exists) |
+| `factorial_grid.pdf` | Mean drift for every data × network combination |
+| `interaction_bar.pdf` | 2×2 cells (mean ± 95% CI), additive prediction B + C − A over cell D, I with bootstrap CI and p (2×2 results only) |
+| `drift_trajectories.pdf` | Mean drift per cell over training rounds (± 95% CI across runs) |
+| `interaction_surface.pdf` | I(α,β) surface (if surface data for the same metric exists) |
 
 ---
 
@@ -368,7 +421,8 @@ Tests run on CPU without downloading datasets (synthetic fixtures in [`tests/con
 | [`tests/test_mixing_matrix.py`](../tests/test_mixing_matrix.py) | W is doubly stochastic and symmetric |
 | [`tests/test_gossip_mixer.py`](../tests/test_gossip_mixer.py) | Gossip step computes Σ_j W[i,j]·params[j] exactly |
 | [`tests/test_cka.py`](../tests/test_cka.py) | CKA values and symmetry properties |
-| [`tests/test_mmd.py`](../tests/test_mmd.py) | MMD estimator |
+| [`tests/test_mmd.py`](../tests/test_mmd.py) | Legacy MMD estimator |
+| [`tests/test_paired_mmd.py`](../tests/test_paired_mmd.py) | Paired MMD: matches a naive loop, unbiased under pairing, scale invariance, detects rotations CKA ignores, calibrated permutation test, evaluator wiring |
 | [`tests/test_partitioner.py`](../tests/test_partitioner.py) | IID and Dirichlet partitioning correctness |
 | [`tests/test_sbm_generator.py`](../tests/test_sbm_generator.py) | SBM graph properties |
 | [`tests/test_interaction_analyzer.py`](../tests/test_interaction_analyzer.py) | Interaction term I and bootstrap test |

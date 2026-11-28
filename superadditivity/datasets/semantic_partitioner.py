@@ -15,6 +15,28 @@ Modes
     Uniform random allocation (ignores communities and clusters).
 ``"dirichlet_semantic"``
     Cluster-aware Dirichlet allocation as described above.
+
+Between-community allocation (``between_community``)
+----------------------------------------------------
+``"dirichlet"`` (default)
+    For every class, the shares that go to each community are drawn from
+    ``Dir(alpha * 1_K)`` and sorted, so that the largest shares go to the
+    class's *home* communities (those whose semantic pool contains it).
+    ``alpha`` therefore controls how different the communities' label
+    distributions are: ``alpha -> inf`` gives the same label mix in every
+    community (IID across communities), and ``alpha -> 0`` gives disjoint
+    semantic class sets. Within a community, samples are split IID across
+    its clients by default (equal sizes, same label mix), so ``alpha``
+    affects only between-community heterogeneity and no client is
+    starved of data. Setting ``alpha_within`` instead splits each class
+    across the community's clients with ``Dir(alpha_within)``, a separate
+    within-community skew. Every sample is assigned to exactly one client.
+``"disjoint"`` (legacy)
+    Each community receives *all* samples of its pool's classes, so
+    communities always have disjoint class sets and ``alpha`` acts only
+    within communities. When several communities share a pool (more
+    communities than semantic clusters, or no clusters), the same samples
+    are assigned to each of them. Kept only to reproduce older runs.
 """
 
 from __future__ import annotations
@@ -56,7 +78,16 @@ class SemanticPartitioner:
         Master run seed from which the Dirichlet seed is derived.
     num_clients:
         Total number of clients.
+    between_community:
+        ``"dirichlet"`` (default) or ``"disjoint"`` (legacy); see the
+        module docstring.
+    alpha_within:
+        Only for ``between_community="dirichlet"``: ``None`` (default)
+        splits each community's samples IID across its clients; a number
+        uses ``Dir(alpha_within)`` per class instead.
     """
+
+    BETWEEN_COMMUNITY_MODES = ("dirichlet", "disjoint")
 
     def __init__(
         self,
@@ -67,9 +98,22 @@ class SemanticPartitioner:
         mode: str,
         run_seed: int,
         num_clients: int,
+        between_community: str = "dirichlet",
+        alpha_within: Optional[float] = None,
     ) -> None:
         if mode not in ("iid", "dirichlet_semantic"):
             raise ValueError(f"Unknown partitioner mode: {mode!r}")
+        if between_community not in self.BETWEEN_COMMUNITY_MODES:
+            raise ValueError(
+                f"between_community must be one of {self.BETWEEN_COMMUNITY_MODES}, "
+                f"got {between_community!r}"
+            )
+        if mode == "dirichlet_semantic" and not alpha > 0:
+            raise ValueError(f"alpha must be positive, got {alpha}")
+        self.between_community = between_community
+        if alpha_within is not None and not alpha_within > 0:
+            raise ValueError(f"alpha_within must be positive or None, got {alpha_within}")
+        self.alpha_within = alpha_within
 
         self.train_dataset = train_dataset
         self.semantic_clusters = semantic_clusters
@@ -118,6 +162,8 @@ class SemanticPartitioner:
         """
         if self.mode == "iid":
             return self._partition_iid()
+        if self.between_community == "dirichlet":
+            return self._partition_dirichlet_between()
         return self._partition_dirichlet_semantic()
 
     def get_stats(self) -> np.ndarray:
@@ -162,8 +208,183 @@ class SemanticPartitioner:
     # Dirichlet-semantic partitioning
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _split_counts(n: int, proportions: np.ndarray) -> np.ndarray:
+        """Integer counts summing to ``n`` (largest-remainder rounding).
+
+        Parameters
+        ----------
+        n:
+            Number of items to split.
+        proportions:
+            Non-negative weights; normalised internally.
+
+        Returns
+        -------
+        np.ndarray
+            Integer counts, same length as ``proportions``, summing to ``n``.
+        """
+        p = np.asarray(proportions, dtype=np.float64)
+        p = p / p.sum()
+        raw = p * n
+        counts = np.floor(raw).astype(int)
+        remainder = n - int(counts.sum())
+        if remainder > 0:
+            order = np.argsort(-(raw - counts), kind="stable")
+            counts[order[:remainder]] += 1
+        return counts
+
+    def _partition_dirichlet_between(self) -> Dict[int, List[int]]:
+        """Home-sorted Dirichlet across communities, then IID (or Dirichlet) within.
+
+        See the module docstring (``between_community="dirichlet"``).
+        """
+        seed = derived_seed(self.run_seed, kind="dirichlet")
+        rng = np.random.RandomState(seed)
+        # Separate stream for the within-community split, so the
+        # between-community allocation is identical whatever alpha_within is.
+        rng_within = np.random.RandomState(seed + 1)
+
+        comm_ids = sorted(self.community_assignments.keys())
+        K = len(comm_ids)
+        pools = self._build_community_class_pools()
+        homes: Dict[int, List[int]] = {c: [] for c in range(self.num_classes)}
+        for comm_id in comm_ids:
+            for cls in pools[comm_id]:
+                homes[cls].append(comm_id)
+
+        result: Dict[int, List[int]] = {i: [] for i in range(self.num_clients)}
+        community_pool: Dict[int, List[int]] = {c: [] for c in comm_ids}
+        for cls in range(self.num_classes):
+            cls_idx = np.where(self.targets == cls)[0]
+            if len(cls_idx) == 0:
+                continue
+            rng.shuffle(cls_idx)
+
+            # Community shares: Dir(alpha), sorted so home communities get
+            # the largest shares (home order and non-home order random).
+            shares = np.sort(rng.dirichlet(np.full(K, self.alpha)))[::-1]
+            home = list(homes[cls]) or list(comm_ids)
+            others = [c for c in comm_ids if c not in home]
+            ordered = list(rng.permutation(home)) + list(rng.permutation(others))
+            comm_counts = self._split_counts(len(cls_idx), shares)
+
+            ptr = 0
+            for comm_id, n_comm in zip(ordered, comm_counts, strict=True):
+                comm_idx = cls_idx[ptr: ptr + n_comm]
+                ptr += n_comm
+                if n_comm == 0:
+                    continue
+                if self.alpha_within is None:
+                    community_pool[comm_id].extend(comm_idx.tolist())
+                    continue
+                clients = self.community_assignments[comm_id]
+                client_props = rng_within.dirichlet(np.full(len(clients), self.alpha_within))
+                client_counts = self._split_counts(n_comm, client_props)
+                cptr = 0
+                for cid, n_cl in zip(clients, client_counts, strict=True):
+                    result[cid].extend(comm_idx[cptr: cptr + n_cl].tolist())
+                    cptr += n_cl
+
+        if self.alpha_within is None:
+            # IID within each community: shuffle its pool, split into equal parts.
+            for comm_id in comm_ids:
+                pool = np.asarray(community_pool[comm_id], dtype=np.int64)
+                rng_within.shuffle(pool)
+                clients = self.community_assignments[comm_id]
+                for cid, part in zip(clients, np.array_split(pool, len(clients)), strict=True):
+                    result[cid].extend(part.tolist())
+
+        self._fix_empty_clients(result)
+        sizes = [len(v) for v in result.values()]
+        logger.info(
+            "Dirichlet partition (between communities): alpha=%.3f, within=%s, "
+            "samples per client min=%d, max=%d, mean=%.1f",
+            self.alpha,
+            "IID" if self.alpha_within is None else f"Dir({self.alpha_within})",
+            min(sizes), max(sizes), np.mean(sizes),
+        )
+        return result
+
+    def _fix_empty_clients(self, result: Dict[int, List[int]]) -> None:
+        """Move one sample from the largest client to each empty client."""
+        empty_ids = [i for i in range(self.num_clients) if len(result[i]) == 0]
+        if not empty_ids:
+            return
+        logger.warning(
+            "Dirichlet partition left %d client(s) empty (alpha=%.4f); "
+            "redistributing samples from largest clients.",
+            len(empty_ids),
+            self.alpha,
+        )
+        for eid in empty_ids:
+            donor = max(result, key=lambda k: len(result[k]))
+            if len(result[donor]) < 2:
+                raise ValueError(
+                    f"Cannot fix empty clients: largest client has only "
+                    f"{len(result[donor])} sample(s). Increase dataset "
+                    f"size or alpha."
+                )
+            result[eid].append(result[donor].pop())
+
+    def community_label_distance(self, assignment: Dict[int, List[int]]) -> float:
+        """Mean total-variation distance between community label distributions.
+
+        A direct measure of between-community data heterogeneity: 0 when
+        every community has the same label mix, 1 when communities have
+        disjoint label sets.
+
+        Parameters
+        ----------
+        assignment:
+            Output of :meth:`partition`.
+
+        Returns
+        -------
+        float
+            Mean over community pairs of ``0.5 * ||p_a - p_b||_1``.
+        """
+        comm_ids = sorted(self.community_assignments.keys())
+        dists = []
+        for comm_id in comm_ids:
+            idx = [i for cid in self.community_assignments[comm_id] for i in assignment[cid]]
+            counts = np.bincount(self.targets[idx], minlength=self.num_classes).astype(float)
+            dists.append(counts / max(counts.sum(), 1.0))
+        tv = [
+            0.5 * float(np.abs(dists[a] - dists[b]).sum())
+            for a in range(len(dists)) for b in range(a + 1, len(dists))
+        ]
+        return float(np.mean(tv)) if tv else 0.0
+
+    def within_community_label_distance(self, assignment: Dict[int, List[int]]) -> float:
+        """Mean total-variation distance between label distributions of
+        clients in the same community (0 = identical label mix).
+
+        Parameters
+        ----------
+        assignment:
+            Output of :meth:`partition`.
+
+        Returns
+        -------
+        float
+            Mean over same-community client pairs.
+        """
+        def dist(idx: List[int]) -> np.ndarray:
+            counts = np.bincount(self.targets[idx], minlength=self.num_classes).astype(float)
+            return counts / max(counts.sum(), 1.0)
+
+        tv = []
+        for clients in self.community_assignments.values():
+            d = [dist(assignment[c]) for c in clients]
+            tv += [
+                0.5 * float(np.abs(d[a] - d[b]).sum())
+                for a in range(len(d)) for b in range(a + 1, len(d))
+            ]
+        return float(np.mean(tv)) if tv else 0.0
+
     def _partition_dirichlet_semantic(self) -> Dict[int, List[int]]:
-        """Cluster-aware Dirichlet allocation."""
+        """Legacy cluster-aware allocation (``between_community="disjoint"``)."""
         seed = derived_seed(self.run_seed, kind="dirichlet")
         rng = np.random.RandomState(seed)
 
@@ -209,25 +430,7 @@ class SemanticPartitioner:
                     result[cid].extend(cls_idx[ptr : ptr + n])
                     ptr += n
 
-        # Guarantee every client has at least one sample by
-        # redistributing from the largest clients to empty ones.
-        empty_ids = [i for i in range(self.num_clients) if len(result[i]) == 0]
-        if empty_ids:
-            logger.warning(
-                "Dirichlet partition left %d client(s) empty (alpha=%.4f); "
-                "redistributing samples from largest clients.",
-                len(empty_ids),
-                self.alpha,
-            )
-            for eid in empty_ids:
-                donor = max(result, key=lambda k: len(result[k]))
-                if len(result[donor]) < 2:
-                    raise ValueError(
-                        f"Cannot fix empty clients: largest client has only "
-                        f"{len(result[donor])} sample(s). Increase dataset "
-                        f"size or alpha."
-                    )
-                result[eid].append(result[donor].pop())
+        self._fix_empty_clients(result)
 
         sizes = [len(v) for v in result.values()]
         logger.info(

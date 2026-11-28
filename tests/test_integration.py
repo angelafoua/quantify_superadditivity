@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import torch
 
 from superadditivity.utils.seed import set_all_seeds
@@ -21,7 +20,7 @@ class TestIntegration:
 
         resnet_clone = clone_model(resnet)
         for (n1, p1), (n2, p2) in zip(
-            resnet.state_dict().items(), resnet_clone.state_dict().items()
+            resnet.state_dict().items(), resnet_clone.state_dict().items(), strict=False
         ):
             assert n1 == n2
             torch.testing.assert_close(p1, p2)

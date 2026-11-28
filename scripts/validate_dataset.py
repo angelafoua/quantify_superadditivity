@@ -75,7 +75,7 @@ def main() -> None:
             download=not args.no_download,
         )
         train_ds, test_ds = loader.load()
-        print(f"✅ Dataset loaded successfully!\n")
+        print("✅ Dataset loaded successfully!\n")
 
         # Validate and print statistics
         loader.validate_and_visualize(

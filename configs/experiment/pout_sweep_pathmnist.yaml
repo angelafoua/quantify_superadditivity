@@ -12,8 +12,12 @@ data_levels:
 p_out_values: [0.07, 0.15, 0.3, 0.5]  # tuned for n_clients=16; lower values cannot form connected graphs
 p_in: 0.7
 
-run_seeds: [42]
-graph_seeds: [100]
+# >= 3 run seeds are needed for per-point uncertainty (the interaction test
+# pairs runs by run_seed); 2 graph seeds average over SBM realisations, whose
+# spectral gap is not monotone in p_out for a single draw at n_clients=16.
+# 16 cells x 3 x 2 = 96 runs. Trim graph_seeds to [100] to halve the cost.
+run_seeds: [42, 123, 456]
+graph_seeds: [100, 200]
 
 model: resnet18
 training: default
