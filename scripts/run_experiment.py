@@ -46,6 +46,7 @@ from superadditivity.evaluation.representation_extractor import RepresentationEx
 from superadditivity.evaluation.cka_analyzer import CKAAnalyzer
 from superadditivity.evaluation.rsa_analyzer import RSAAnalyzer
 from superadditivity.evaluation.mmd_analyzer import MMDAnalyzer
+from superadditivity.evaluation.paired_mmd_analyzer import PairedMMDAnalyzer
 from superadditivity.evaluation.fisher_analyzer import FisherAnalyzer
 from superadditivity.evaluation.centroid_analyzer import CentroidAnalyzer
 from superadditivity.evaluation.drift_tracker import DriftTracker
@@ -287,7 +288,29 @@ def run(cfg: DictConfig) -> dict:
     extractor = RepresentationExtractor(layer_names=layer_names, device=str(device))
     cka = CKAAnalyzer()
     rsa = RSAAnalyzer()
-    mmd = MMDAnalyzer(n_permutations=200, seed=0)
+    eval_cfg = cfg.get("evaluation", {}) or {}
+    legacy_cfg = eval_cfg.get("legacy_community_mmd", {}) or {}
+    mmd = (
+        MMDAnalyzer(n_permutations=int(legacy_cfg.get("n_permutations", 200)), seed=0)
+        if legacy_cfg.get("enabled", False)
+        else None
+    )
+    pmmd_cfg = eval_cfg.get("paired_mmd", {}) or {}
+    paired_mmd = None
+    paired_mmd_layers = None
+    if pmmd_cfg.get("enabled", True):
+        paired_mmd = PairedMMDAnalyzer(
+            bandwidth_multipliers=list(
+                pmmd_cfg.get("bandwidth_multipliers", [0.25, 0.5, 1.0, 2.0, 4.0])
+            ),
+            bandwidth_subsample=int(pmmd_cfg.get("bandwidth_subsample", 2000)),
+            bandwidth_seed=int(pmmd_cfg.get("bandwidth_seed", 0)),
+            n_permutations=int(pmmd_cfg.get("n_permutations", 10000)),
+            permutation_seed=int(pmmd_cfg.get("permutation_seed", 0)),
+            device=str(device),
+        )
+        layers_cfg = pmmd_cfg.get("layers", None)
+        paired_mmd_layers = list(layers_cfg) if layers_cfg is not None else None
     fisher = FisherAnalyzer()
     centroid = CentroidAnalyzer()
     drift_tracker = DriftTracker(
@@ -309,6 +332,8 @@ def run(cfg: DictConfig) -> dict:
         test_loader=test_loader,
         primary_layer=layer_names[-2],
         device=str(device),
+        paired_mmd=paired_mmd,
+        paired_mmd_layers=paired_mmd_layers,
     )
 
     checkpoint_mgr = CheckpointManager(

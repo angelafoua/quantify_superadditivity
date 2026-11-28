@@ -45,6 +45,7 @@ else is library code under `superadditivity/`.
 | Training loop (D-SGD) | `superadditivity/training/dsgd_coordinator.py` |
 | Gossip mixing (critical!) | `superadditivity/communication/gossip_mixer.py` |
 | Drift metrics (CKA, RSA, MMD, Fisher, Centroid) | `superadditivity/evaluation/` |
+| Paired client-level MMD (reported MMD protocol) | `superadditivity/evaluation/paired_mmd_analyzer.py` |
 | Superadditivity analysis (I, bootstrap, surface fit) | `superadditivity/analysis/interaction_analyzer.py` |
 | Statistics (ANOVA, effect sizes, mixed-effects) | `superadditivity/analysis/` |
 | Figures | `superadditivity/visualization/` |

@@ -13,3 +13,24 @@ n_communities: 4
 
 run_seed: 42
 graph_seed: 100
+
+# Drift-metric settings (consumed in scripts/run_experiment.py)
+evaluation:
+  # Client-level paired MMD: the MMD protocol used for reported results.
+  # See superadditivity/evaluation/paired_mmd_analyzer.py for the definition.
+  paired_mmd:
+    enabled: true
+    layers: null                 # null = every extracted layer
+    # Multiples of the per-evaluation median-heuristic bandwidth. 1.0 is
+    # the primary bandwidth and is required; the rest are for sensitivity.
+    bandwidth_multipliers: [0.25, 0.5, 1.0, 2.0, 4.0]
+    bandwidth_subsample: 2000    # pooled points used for the median heuristic
+    bandwidth_seed: 0            # fixed across runs; do not tie to run_seed
+    n_permutations: 10000        # descriptive B - W test; 0 disables
+    permutation_seed: 0
+  # Legacy community-level MMD with a 200-permutation test per community
+  # pair. Biased for paired probe samples and ~50 s per evaluation; kept
+  # only to compare against older runs.
+  legacy_community_mmd:
+    enabled: false
+    n_permutations: 200

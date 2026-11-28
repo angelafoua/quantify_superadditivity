@@ -212,7 +212,8 @@ The `run()` function executes these steps in order:
    - [`superadditivity/evaluation/representation_extractor.py`](../superadditivity/evaluation/representation_extractor.py) — extract layer activations on the probe set (float64)
    - [`superadditivity/evaluation/cka_analyzer.py`](../superadditivity/evaluation/cka_analyzer.py) — layer-wise CKA (primary drift metric)
    - [`superadditivity/evaluation/rsa_analyzer.py`](../superadditivity/evaluation/rsa_analyzer.py) — Representational Similarity Analysis
-   - [`superadditivity/evaluation/mmd_analyzer.py`](../superadditivity/evaluation/mmd_analyzer.py) — Maximum Mean Discrepancy
+   - [`superadditivity/evaluation/paired_mmd_analyzer.py`](../superadditivity/evaluation/paired_mmd_analyzer.py) — client-level paired MMD (between-minus-within community drift, bandwidth sensitivity; settings under `evaluation.paired_mmd` in `configs/config.yaml`)
+   - [`superadditivity/evaluation/mmd_analyzer.py`](../superadditivity/evaluation/mmd_analyzer.py) — legacy community-level MMD, off by default (`evaluation.legacy_community_mmd`), kept for comparison only
    - [`superadditivity/evaluation/fisher_analyzer.py`](../superadditivity/evaluation/fisher_analyzer.py) — Fisher divergence
    - [`superadditivity/evaluation/centroid_analyzer.py`](../superadditivity/evaluation/centroid_analyzer.py) — centroid distance
    - [`superadditivity/evaluation/drift_tracker.py`](../superadditivity/evaluation/drift_tracker.py) — accumulates metrics and writes to HDF5
@@ -368,7 +369,8 @@ Tests run on CPU without downloading datasets (synthetic fixtures in [`tests/con
 | [`tests/test_mixing_matrix.py`](../tests/test_mixing_matrix.py) | W is doubly stochastic and symmetric |
 | [`tests/test_gossip_mixer.py`](../tests/test_gossip_mixer.py) | Gossip step computes Σ_j W[i,j]·params[j] exactly |
 | [`tests/test_cka.py`](../tests/test_cka.py) | CKA values and symmetry properties |
-| [`tests/test_mmd.py`](../tests/test_mmd.py) | MMD estimator |
+| [`tests/test_mmd.py`](../tests/test_mmd.py) | Legacy MMD estimator |
+| [`tests/test_paired_mmd.py`](../tests/test_paired_mmd.py) | Paired MMD: matches a naive loop, unbiased under pairing, scale invariance, detects rotations CKA ignores, calibrated permutation test, evaluator wiring |
 | [`tests/test_partitioner.py`](../tests/test_partitioner.py) | IID and Dirichlet partitioning correctness |
 | [`tests/test_sbm_generator.py`](../tests/test_sbm_generator.py) | SBM graph properties |
 | [`tests/test_interaction_analyzer.py`](../tests/test_interaction_analyzer.py) | Interaction term I and bootstrap test |
