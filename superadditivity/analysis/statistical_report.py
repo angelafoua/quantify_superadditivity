@@ -109,6 +109,12 @@ class StatisticalReport:
     def add_surface_fit_results(self, surface_result: Dict[str, Any]) -> None:
         """Format surface fit parameters."""
         params = surface_result["params"]
+        if not surface_result.get("fitted", True):
+            self.add_section(
+                "Interaction Surface Fit",
+                "Not fitted (too few sweep points or the fit failed).",
+            )
+            return
         lines = [
             "Model: I(α, β) = a · α^(-b) · β^c + d",
             "",
@@ -116,7 +122,8 @@ class StatisticalReport:
             f"- b = {params['b']:.4f}",
             f"- c = {params['c']:.4f}",
             f"- d = {params['d']:.4f}",
-            f"- R² = {surface_result['r_squared']:.4f}",
+            f"- R² = {surface_result['r_squared']:.4f} (descriptive: points share "
+            "reference cells, so they are not independent)",
         ]
         self.add_section("Interaction Surface Fit", "\n".join(lines))
 

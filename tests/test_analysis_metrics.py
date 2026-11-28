@@ -27,8 +27,12 @@ class TestDriftMetric:
         np.testing.assert_allclose(mmd.to_drift([0.0, 0.01, -0.001]), [0.0, 0.01, -0.001])
 
     def test_named_metrics_point_at_summary_aliases(self):
-        assert DRIFT_METRICS["cka"].column == "final_cka_cross_community"
-        assert DRIFT_METRICS["mmd"].column == "final_mmd_paired_drift"
+        assert DRIFT_METRICS["cka"].column == "final_cka_client_between"
+        assert DRIFT_METRICS["cka_bw"].column == "final_cka_client_drift"
+        assert DRIFT_METRICS["cka_community"].column == "final_cka_cross_community"
+        assert DRIFT_METRICS["mmd"].column == "final_mmd_paired_between"
+        assert DRIFT_METRICS["mmd_bw"].column == "final_mmd_paired_drift"
+        assert DRIFT_METRICS["cka_window"].column == "window_cka_client_between"
 
     def test_raw_column_requires_orientation(self):
         with pytest.raises(ValueError, match="orientation"):
@@ -115,10 +119,10 @@ def _write_summaries(root: Path, with_mmd: bool = True) -> None:
                 "network_regime": net,
                 "run_seed": seed,
                 "graph_seed": 100,
-                "final_cka_cross_community": cka + 0.01 * rng.randn(),
+                "final_cka_client_between": cka + 0.01 * rng.randn(),
             }
             if with_mmd:
-                summary["final_mmd_paired_drift"] = mmd + 0.0005 * rng.randn()
+                summary["final_mmd_paired_between"] = mmd + 0.0005 * rng.randn()
             (run_dir / "summary.json").write_text(json.dumps(summary))
 
 
@@ -139,7 +143,7 @@ class TestAggregatorTable:
 
     def test_missing_metric_column_raises(self, tmp_path):
         _write_summaries(tmp_path, with_mmd=False)
-        with pytest.raises(ValueError, match="final_mmd_paired_drift"):
+        with pytest.raises(ValueError, match="final_mmd_paired_between"):
             ResultAggregator(str(tmp_path)).build_factorial_table(
                 drift_metric=resolve_drift_metric("mmd")
             )
@@ -192,7 +196,7 @@ class TestTransforms:
         m = resolve_drift_metric("cka", transform="logit")
         np.testing.assert_allclose(m.to_drift([0.75]), [np.log(0.25 / 0.75)])
         assert m.key == "cka_logit"
-        assert m.drift_definition == "Drift = logit(1 - final_cka_cross_community)"
+        assert m.drift_definition == "Drift = logit(1 - final_cka_client_between)"
 
     def test_log_rejects_non_positive_drift(self):
         m = resolve_drift_metric("mmd", transform="log")
@@ -213,3 +217,53 @@ class TestTransforms:
 
         assert output_subdir(resolve_drift_metric("cka"), "analysis") == "analysis"
         assert output_subdir(resolve_drift_metric("cka", transform="logit"), "analysis") == "analysis_cka_logit"
+
+
+class TestBackfillAliases:
+    def test_old_run_gets_primary_aliases_from_h5(self, tmp_path):
+        from superadditivity.evaluation.drift_tracker import DriftTracker
+
+        run = tmp_path / "iid_sbm" / "seed_1_graph_1"
+        run.mkdir(parents=True)
+        tracker = DriftTracker(output_path=str(run / "drift_metrics.h5"))
+        tracker.record(0, {"cka_layer4_mean": 0.9, "cka_fc_mean": 0.8,
+                           "cka_client_layer4_between": 0.7, "mmd_paired_layer4_between": 0.02})
+        tracker.save()
+        (run / "summary.json").write_text(json.dumps(
+            {"data_regime": "iid", "network_regime": "sbm"}
+        ))
+        df = ResultAggregator(str(tmp_path)).load_summaries()
+        row = df.iloc[0]
+        assert row["final_cka_cross_community"] == pytest.approx(0.9)   # layer4, not fc
+        assert row["final_cka_client_between"] == pytest.approx(0.7)
+        assert row["final_mmd_paired_between"] == pytest.approx(0.02)
+
+
+class TestLevelPooling:
+    @staticmethod
+    def _grid():
+        rows = []
+        for data, alpha in (("iid", float("inf")), ("dirichlet_semantic", 10.0),
+                            ("dirichlet_semantic", 0.1)):
+            for net, pout in (("erdos_renyi", None), ("sbm", 0.3), ("sbm", 0.07)):
+                rows.append({"data_regime": data, "network_regime": net,
+                             "dirichlet_alpha": alpha, "p_out": pout})
+        return pd.DataFrame(rows)
+
+    def test_multiple_alpha_levels_raise(self):
+        df = self._grid()
+        df = df[df["p_out"].isna() | (df["p_out"] == 0.3)]
+        with pytest.raises(ValueError, match="dirichlet_alpha"):
+            assign_factorial_cells(df)
+
+    def test_multiple_pout_levels_raise(self):
+        df = self._grid()
+        df = df[df["dirichlet_alpha"].isin([float("inf"), 0.1])]
+        with pytest.raises(ValueError, match="p_out"):
+            assign_factorial_cells(df)
+
+    def test_single_level_per_factor_ok(self):
+        df = self._grid()
+        df = df[df["dirichlet_alpha"].isin([float("inf"), 0.1])
+                & (df["p_out"].isna() | (df["p_out"] == 0.07))]
+        assert sorted(assign_factorial_cells(df)) == ["A", "B", "C", "D"]

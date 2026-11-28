@@ -43,13 +43,14 @@ from superadditivity.training.local_only_coordinator import LocalOnlyCoordinator
 from superadditivity.training.lr_schedule import CosineDecaySchedule
 from superadditivity.evaluation.experiment_evaluator import ExperimentEvaluator
 from superadditivity.evaluation.representation_extractor import RepresentationExtractor
-from superadditivity.evaluation.cka_analyzer import CKAAnalyzer
+from superadditivity.evaluation.cka_analyzer import CKAAnalyzer, ClientCKAAnalyzer
 from superadditivity.evaluation.rsa_analyzer import RSAAnalyzer
 from superadditivity.evaluation.mmd_analyzer import MMDAnalyzer
 from superadditivity.evaluation.paired_mmd_analyzer import PairedMMDAnalyzer
 from superadditivity.evaluation.fisher_analyzer import FisherAnalyzer
 from superadditivity.evaluation.centroid_analyzer import CentroidAnalyzer
 from superadditivity.evaluation.drift_tracker import DriftTracker
+from superadditivity.analysis.drift_metrics import PRIMARY_ALIASES
 from superadditivity.logging.csv_logger import CSVLogger
 from superadditivity.logging.metadata_store import MetadataStore
 from superadditivity.logging.checkpoint_manager import (
@@ -222,11 +223,16 @@ def run(cfg: DictConfig) -> dict:
             run_seed=run_seed,
             num_clients=cfg.n_clients,
             between_community=cfg.data.get("between_community", "dirichlet"),
+            alpha_within=cfg.data.get("alpha_within", None),
         )
         partition_result = partitioner.partition()
         partition_stats["community_label_tv"] = partitioner.community_label_distance(
             partition_result
         )
+        partition_stats["within_community_label_tv"] = (
+            partitioner.within_community_label_distance(partition_result)
+        )
+        partition_stats["alpha_within"] = cfg.data.get("alpha_within", None)
         partition_stats["between_community"] = (
             cfg.data.get("between_community", "dirichlet")
             if cfg.data.partition_method == "dirichlet_semantic"
@@ -354,6 +360,16 @@ def run(cfg: DictConfig) -> dict:
             if eval_cfg.get("accuracy_every") is not None else None
         ),
         final_round=cfg.training.total_rounds - 1,
+        client_cka=(
+            ClientCKAAnalyzer(device=str(device))
+            if (eval_cfg.get("client_cka", {}) or {}).get("enabled", True)
+            else None
+        ),
+        client_cka_layers=(
+            list((eval_cfg.get("client_cka", {}) or {})["layers"])
+            if (eval_cfg.get("client_cka", {}) or {}).get("layers") is not None
+            else None
+        ),
     )
 
     checkpoint_mgr = CheckpointManager(
@@ -410,21 +426,21 @@ def run(cfg: DictConfig) -> dict:
         trajectory = drift_tracker.get_trajectory(key)
         if trajectory.ndim == 1 and len(trajectory) > 0:
             final_drift_metrics[f"final_{key}"] = float(trajectory[-1])
-    # Mean over the last `summary_window` evaluations: less noisy than the
-    # single final evaluation.
-    window = int((cfg.get("evaluation", {}) or {}).get("summary_window", 5))
+    # Mean over the evaluations in the last `summary_window_rounds` rounds:
+    # less noisy than the final evaluation alone, and the same time span
+    # for every metric whatever its evaluation frequency.
+    window_rounds = int(
+        (cfg.get("evaluation", {}) or {}).get("summary_window_rounds", 50)
+    )
     for key in sorted(drift_tracker._recorded_keys):
         trajectory = drift_tracker.get_trajectory(key)
         if trajectory.ndim == 1 and len(trajectory) > 0:
-            final_drift_metrics[f"window_{key}"] = float(
-                np.mean(trajectory[-window:])
-            )
-    # Alias the primary-layer CKA mean and paired-MMD drift (B - W) as the
-    # canonical analysis columns.
-    for key, alias in (
-        (f"cka_{primary_layer}_mean", "cka_cross_community"),
-        (f"mmd_paired_{primary_layer}_drift", "mmd_paired_drift"),
-    ):
+            rounds = drift_tracker.get_rounds(key)
+            in_window = rounds >= rounds[-1] - window_rounds
+            final_drift_metrics[f"window_{key}"] = float(np.mean(trajectory[in_window]))
+    # Canonical primary-layer columns used by the analysis.
+    for alias, pattern in PRIMARY_ALIASES.items():
+        key = pattern.format(layer=primary_layer)
         if f"final_{key}" in final_drift_metrics:
             final_drift_metrics[f"final_{alias}"] = final_drift_metrics[f"final_{key}"]
             final_drift_metrics[f"window_{alias}"] = final_drift_metrics[f"window_{key}"]
@@ -438,6 +454,10 @@ def run(cfg: DictConfig) -> dict:
         "dirichlet_alpha": cfg.data.dirichlet_alpha,
         "network_regime": cfg.graph.topology,
         "mix_bn_buffers": bool(cfg.training.get("mix_bn_buffers", False)),
+        # Graph-level parameters, so analyses can tell SBM levels apart
+        # (network_regime is only the topology name).
+        "p_in": cfg.graph.get("p_in", None),
+        "p_out": cfg.graph.get("p_out", None),
         "primary_layer": primary_layer,
         "dataset": cfg.data.dataset,
         "model": cfg.model.architecture,

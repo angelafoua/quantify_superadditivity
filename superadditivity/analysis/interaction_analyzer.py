@@ -145,11 +145,30 @@ class InteractionAnalyzer:
         Returns
         -------
         dict with ``"params"`` (a, b, c, d), ``"r_squared"``,
-        ``"predicted"`` array, ``"residuals"`` array.
+        ``"predicted"`` array, ``"residuals"`` array and ``"fitted"``. If
+        there are not more points than parameters, or the fit fails, the
+        values are ``nan`` and ``fitted`` is ``False``. R² is descriptive
+        only: all points share the reference cells, so they are not
+        independent.
         """
         alpha_arr = np.asarray(alpha_values, dtype=np.float64)
         beta_arr = np.asarray(beta_values, dtype=np.float64)
         I_arr = np.asarray(I_values, dtype=np.float64)
+
+        n_params = 4
+        if len(I_arr) <= n_params:
+            logger.warning(
+                "Surface fit skipped: %d point(s) for a %d-parameter model "
+                "(need more points than parameters).", len(I_arr), n_params,
+            )
+            nan = float("nan")
+            return {
+                "params": {"a": nan, "b": nan, "c": nan, "d": nan},
+                "r_squared": nan,
+                "predicted": np.full_like(I_arr, np.nan),
+                "residuals": np.full_like(I_arr, np.nan),
+                "fitted": False,
+            }
 
         def model(X, a, b, c, d):
             alpha, beta = X
@@ -176,6 +195,7 @@ class InteractionAnalyzer:
             )
 
             return {
+                "fitted": True,
                 "params": {
                     "a": float(popt[0]),
                     "b": float(popt[1]),
@@ -189,11 +209,13 @@ class InteractionAnalyzer:
 
         except (RuntimeError, optimize.OptimizeWarning) as e:
             logger.warning("Surface fit failed: %s", e)
+            nan = float("nan")
             return {
-                "params": {"a": 0, "b": 0, "c": 0, "d": 0},
-                "r_squared": 0.0,
-                "predicted": np.zeros_like(I_arr),
-                "residuals": I_arr.copy(),
+                "params": {"a": nan, "b": nan, "c": nan, "d": nan},
+                "r_squared": nan,
+                "predicted": np.full_like(I_arr, np.nan),
+                "residuals": np.full_like(I_arr, np.nan),
+                "fitted": False,
             }
 
     @staticmethod
@@ -204,6 +226,7 @@ class InteractionAnalyzer:
         confidence: float = 0.95,
         n_bootstrap: int = 10000,
         seed: Optional[int] = None,
+        min_bootstrap_units: int = 10,
     ) -> Dict[str, Any]:
         """Interaction test that pairs runs by experimental unit (run seed).
 
@@ -214,9 +237,11 @@ class InteractionAnalyzer:
 
         ``I_u = D_u - B_u - C_u + A_u``.
 
-        Inference is on the ``I_u``: a one-sided t-test of ``H0: I <= 0``,
-        a t-based confidence interval, and a percentile bootstrap CI that
-        resamples units.
+        Inference is on the ``I_u``: a one-sided t-test of ``H0: I <= 0`` and
+        a t-based confidence interval. A percentile bootstrap CI over units
+        is added only with at least ``min_bootstrap_units`` units: with
+        few units it under-covers (about 81% for a nominal 95% at 5 units
+        in simulation, against 94% for the t interval).
 
         Parameters
         ----------
@@ -233,6 +258,8 @@ class InteractionAnalyzer:
             Bootstrap replicates over units.
         seed:
             RNG seed for the bootstrap.
+        min_bootstrap_units:
+            Minimum number of units for the bootstrap CI (``nan`` below).
 
         Returns
         -------
@@ -286,10 +313,11 @@ class InteractionAnalyzer:
             result["I_ci_lower"] = result["I_ci_upper"] = float(mean)
             result["p_value"] = 0.0 if mean > 0 else 1.0
 
-        rng = np.random.RandomState(seed)
-        boot = I_units[rng.randint(0, n, size=(n_bootstrap, n))].mean(axis=1)
-        result["bootstrap_ci_lower"] = float(np.percentile(boot, 100 * alpha / 2))
-        result["bootstrap_ci_upper"] = float(np.percentile(boot, 100 * (1 - alpha / 2)))
+        if n >= min_bootstrap_units:
+            rng = np.random.RandomState(seed)
+            boot = I_units[rng.randint(0, n, size=(n_bootstrap, n))].mean(axis=1)
+            result["bootstrap_ci_lower"] = float(np.percentile(boot, 100 * alpha / 2))
+            result["bootstrap_ci_upper"] = float(np.percentile(boot, 100 * (1 - alpha / 2)))
 
         logger.info(
             "Paired interaction test (%d units): I=%.4g [%.4g, %.4g], p=%.4g",

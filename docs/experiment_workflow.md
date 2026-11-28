@@ -186,7 +186,7 @@ The `run()` function executes these steps in order:
    - [`superadditivity/graphs/graph_metrics.py`](../superadditivity/graphs/graph_metrics.py) — spectral gap, conductance, etc.
 
 4. **Partition data** — assigns training samples to the `n_clients` clients (16 by default):
-   - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew (IID or non-IID modes). With `between_community: dirichlet` (default), each class's samples are split across communities by a sorted `Dir(α)` draw whose largest shares go to the class's home community (its semantic cluster), then across the community's clients by `Dir(α)`. α therefore controls how different the communities' label mixes are, and each sample goes to exactly one client. The run summary records `community_label_tv`, the mean total-variation distance between community label distributions. `between_community: disjoint` reproduces the legacy split, where α acts only inside communities.
+   - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew (IID or non-IID modes). With `between_community: dirichlet` (default), each class's samples are split across communities by a sorted `Dir(α)` draw whose largest shares go to the class's home community (its semantic cluster). Each community's samples are then split IID across its clients (equal sizes, same label mix), so α controls only how different the communities are. Each sample goes to exactly one client. Setting `alpha_within` adds a separate within-community skew, `Dir(alpha_within)` per class. Summaries record `community_label_tv` and `within_community_label_tv`, the mean total-variation distances between label distributions of communities and of clients within a community. `between_community: disjoint` reproduces the legacy split.
    - [`superadditivity/datasets/quantity_skew_partitioner.py`](../superadditivity/datasets/quantity_skew_partitioner.py) — IID labels with skewed sample counts
    - [`superadditivity/datasets/client_dataset.py`](../superadditivity/datasets/client_dataset.py) — wraps indices into per-client `Dataset` objects
 
@@ -317,7 +317,20 @@ python scripts/run_analysis.py --results_dir outputs/core_factorial \
 
 **Scale robustness.** `--transform log|logit` applies a monotone transform to drift before the analysis (e.g. `--metric cka --transform logit`). An interaction can appear or vanish under such rescaling, so report the conclusion on more than one scale. Outputs go to `analysis_<metric>_<transform>/`.
 
-**Window metrics.** `--metric cka_window` / `mmd_window` analyse the mean over the last `evaluation.summary_window` evaluations instead of the final one.
+**Metrics (`--metric`).** All are primary-layer, client-level unless noted:
+
+| Name | Drift | Notes |
+|---|---|---|
+| `cka` (default) | 1 − mean CKA over client pairs in different communities | Primary; proposal's "CKA divergence between clients" |
+| `cka_bw` | (1 − CKA_between) − (1 − CKA_within) | Is drift aligned with the communities? |
+| `cka_community` | 1 − CKA between community-averaged embeddings | Legacy, for comparison with older runs |
+| `mmd` | Paired MMD² averaged over client pairs in different communities | Distribution-level, coordinate-sensitive |
+| `mmd_bw` | MMD² between − within communities | |
+| `<name>_window` | Same, averaged over the evaluations in the last `evaluation.summary_window_rounds` rounds | Less noisy than the final evaluation |
+
+Any other summary column can be analysed with `--metric <column> --orientation similarity|distance`.
+
+**Design checks.** A results folder must be a clean 2×2. Runs labelled with different `dirichlet_alpha` values (non-IID) or `p_out` values (community-structured) stop the analysis with an error instead of being pooled. Summaries record `p_in` / `p_out` for this.
 
 **Drift orientation.** Every analysis runs on *drift* (higher = more drift),
 so that I = Drift(D) − Drift(B) − Drift(C) + Drift(A) > 0 means superadditive

@@ -19,9 +19,13 @@ evaluation:
   # Test accuracy of every client's own model, every N rounds and at the
   # final round (rounded to evaluation rounds). null disables it.
   accuracy_every: 50
-  # Summaries also record window_<metric>: the mean over the last N
-  # evaluations (analyse with --metric cka_window / mmd_window).
-  summary_window: 5
+  # Summaries also record window_<metric>: the mean over the evaluations in
+  # the last N rounds (analyse with --metric cka_window, mmd_window, ...).
+  summary_window_rounds: 50
+  # Client-level CKA (primary CKA drift: 1 - CKA between communities).
+  client_cka:
+    enabled: true
+    layers: null                 # null = every extracted layer
   # Client-level paired MMD: the MMD protocol used for reported results.
   # See superadditivity/evaluation/paired_mmd_analyzer.py for the definition.
   paired_mmd:

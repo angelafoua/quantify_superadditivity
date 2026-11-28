@@ -159,9 +159,16 @@ def plot_interaction_bar_figure(
         return False
 
     means, cis, counts = factorial_cell_stats(table)
-    I = InteractionAnalyzer.compute_interaction(
-        *(table.loc[table["cell"] == c, "metric"].values for c in "ABCD")
-    )
+    # Same estimate as run_analysis.py: mean of per-run-seed I when seeds
+    # are recorded (equals D - B - C + A of cell means only when balanced).
+    if "run_seed" in table.columns and table["run_seed"].notna().all():
+        I = InteractionAnalyzer.paired_interaction_test(
+            {c: table[table["cell"] == c] for c in "ABCD"}, n_bootstrap=1,
+        )["I_observed"]
+    else:
+        I = InteractionAnalyzer.compute_interaction(
+            *(table.loc[table["cell"] == c, "metric"].values for c in "ABCD")
+        )
 
     ci = p_value = n_boot = None
     test_path = results_dir / output_subdir(metric, "analysis") / "interaction_test.json"

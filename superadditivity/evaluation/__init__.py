@@ -5,7 +5,7 @@ Re-exports the principal classes so they can be imported directly from
 """
 
 from superadditivity.evaluation.representation_extractor import RepresentationExtractor
-from superadditivity.evaluation.cka_analyzer import CKAAnalyzer
+from superadditivity.evaluation.cka_analyzer import CKAAnalyzer, ClientCKAAnalyzer
 from superadditivity.evaluation.rsa_analyzer import RSAAnalyzer
 from superadditivity.evaluation.mmd_analyzer import MMDAnalyzer
 from superadditivity.evaluation.paired_mmd_analyzer import PairedMMDAnalyzer
@@ -17,6 +17,7 @@ from superadditivity.evaluation.experiment_evaluator import ExperimentEvaluator
 __all__ = [
     "RepresentationExtractor",
     "CKAAnalyzer",
+    "ClientCKAAnalyzer",
     "RSAAnalyzer",
     "MMDAnalyzer",
     "PairedMMDAnalyzer",

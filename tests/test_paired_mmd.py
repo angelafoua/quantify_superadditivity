@@ -244,6 +244,7 @@ class TestEvaluatorIntegration:
         from superadditivity.evaluation import (
             CentroidAnalyzer,
             CKAAnalyzer,
+            ClientCKAAnalyzer,
             DriftTracker,
             ExperimentEvaluator,
             FisherAnalyzer,
@@ -279,8 +280,13 @@ class TestEvaluatorIntegration:
             community_map=community_map,
             primary_layer="2",
             paired_mmd=PairedMMDAnalyzer(bandwidth_multipliers=[0.5, 1.0], n_permutations=50),
+            client_cka=ClientCKAAnalyzer(),
         )
         scalars = evaluator.evaluate(clients, round_num=0)
+        for layer in ("2", "4"):
+            for suffix in ("between", "within", "drift"):
+                assert f"cka_client_{layer}_{suffix}" in scalars
+            assert tracker.get_trajectory(f"cka_client_{layer}_matrix").shape == (1, 4, 4)
 
         for layer in ("2", "4"):
             for suffix in ("drift", "between", "within", "bandwidth", "p_value",

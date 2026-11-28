@@ -150,3 +150,19 @@ class TestSweepInteractions:
         df = ResultAggregator(str(tmp_path)).load_summaries()
         alphas = dict(zip(df["data_regime"], df["dirichlet_alpha"], strict=False))
         assert np.isinf(alphas["iid"]) and alphas["dirichlet_semantic"] == 0.5
+
+
+def test_unit_bootstrap_only_with_enough_units():
+    cells = TestPairedInteractionTest._cells(n_units=5)
+    few = InteractionAnalyzer.paired_interaction_test(cells, seed=0)
+    assert np.isnan(few["bootstrap_ci_lower"]) and np.isfinite(few["I_ci_lower"])
+    cells = TestPairedInteractionTest._cells(n_units=12)
+    many = InteractionAnalyzer.paired_interaction_test(cells, seed=0)
+    assert np.isfinite(many["bootstrap_ci_lower"])
+
+
+def test_surface_fit_skipped_with_too_few_points():
+    res = InteractionAnalyzer.fit_interaction_surface(
+        np.array([0.5, 10.0]), np.array([0.07, 0.07]), np.array([0.2, 0.01])
+    )
+    assert res["fitted"] is False and np.isnan(res["r_squared"])

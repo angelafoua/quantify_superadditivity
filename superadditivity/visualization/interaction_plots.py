@@ -210,8 +210,22 @@ def plot_factorial_grid(
     df = results_df[results_df[metric.column].notna()].copy()
     df["_drift"] = metric.to_drift(df[metric.column])
 
+    # data_regime / network_regime don't distinguish alpha or p_out levels;
+    # label rows and columns by level when those columns exist.
+    def level_label(row, base_col, level_col, fmt):
+        val = row.get(level_col) if level_col in df.columns else None
+        if val is None or (isinstance(val, float) and (np.isnan(val) or np.isinf(val))):
+            return str(row[base_col])
+        return f"{row[base_col]} ({fmt.format(val)})"
+
+    df["_data_level"] = df.apply(
+        lambda r: level_label(r, data_col, "dirichlet_alpha", "α={:g}"), axis=1
+    )
+    df["_net_level"] = df.apply(
+        lambda r: level_label(r, network_col, "p_out", "p_out={:g}"), axis=1
+    )
     pivot = df.pivot_table(
-        values="_drift", index=data_col, columns=network_col, aggfunc="mean",
+        values="_drift", index="_data_level", columns="_net_level", aggfunc="mean",
     )
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 6))

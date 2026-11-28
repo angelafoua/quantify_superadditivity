@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, replace
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -62,6 +62,9 @@ class DriftMetric:
         Monotone transform applied after orientation: ``"none"``,
         ``"log"`` (drift must be > 0) or ``"logit"`` (drift must be in
         (0, 1), e.g. 1 - CKA).
+    display:
+        Human-readable drift name for plot labels (default derived from
+        ``name``).
     """
 
     name: str
@@ -70,6 +73,7 @@ class DriftMetric:
     description: str
     trajectory_key: Optional[str] = None
     transform: str = "none"
+    display: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.orientation not in ORIENTATIONS:
@@ -130,8 +134,10 @@ class DriftMetric:
     @property
     def label(self) -> str:
         """Axis label for plots, e.g. ``"Drift (1 - CKA)"``."""
-        shown = self.name.upper() if self.name in DRIFT_METRICS else self.name
-        inner = f"1 - {shown}" if self.orientation == SIMILARITY else shown
+        if self.display is not None:
+            inner = self.display
+        else:
+            inner = f"1 - {self.name}" if self.orientation == SIMILARITY else self.name
         if self.transform == "none":
             return f"Drift ({inner})"
         return f"{self.transform}(Drift ({inner}))"
@@ -147,50 +153,59 @@ class DriftMetric:
         return f"Drift = {self.transform}({inner})"
 
 
-#: Named metrics. ``cka`` is the paper's primary metric.
-DRIFT_METRICS: Dict[str, DriftMetric] = {
-    "cka": DriftMetric(
-        name="cka",
-        column="final_cka_cross_community",
-        orientation=SIMILARITY,
-        description=(
-            "Primary-layer linear CKA between community-averaged embeddings "
-            "(mean off-diagonal), final round"
-        ),
-        trajectory_key="cka_{layer}_mean",
-    ),
-    "mmd": DriftMetric(
-        name="mmd",
-        column="final_mmd_paired_drift",
-        orientation=DISTANCE,
-        description=(
-            "Primary-layer client-level paired MMD^2, between-community minus "
-            "within-community mean (B - W), median-heuristic bandwidth, final round"
-        ),
-        trajectory_key="mmd_paired_{layer}_drift",
-    ),
+#: Primary-layer summary aliases: ``<alias>`` -> per-layer tracker key.
+#: ``scripts/run_experiment.py`` writes ``final_<alias>`` (last evaluation)
+#: and ``window_<alias>`` (mean over the last ``summary_window_rounds``
+#: rounds) for each; the aggregator backfills ``final_<alias>`` for older
+#: runs from ``drift_metrics.h5``.
+PRIMARY_ALIASES: Dict[str, str] = {
+    "cka_client_between": "cka_client_{layer}_between",
+    "cka_client_drift": "cka_client_{layer}_drift",
+    "cka_cross_community": "cka_{layer}_mean",
+    "mmd_paired_between": "mmd_paired_{layer}_between",
+    "mmd_paired_drift": "mmd_paired_{layer}_drift",
 }
 
-DRIFT_METRICS["cka_window"] = DriftMetric(
-    name="cka_window",
-    column="window_cka_cross_community",
-    orientation=SIMILARITY,
-    description=(
-        "Primary-layer linear CKA between community-averaged embeddings, mean "
-        "over the last evaluation.summary_window evaluations"
-    ),
-    trajectory_key="cka_{layer}_mean",
-)
-DRIFT_METRICS["mmd_window"] = DriftMetric(
-    name="mmd_window",
-    column="window_mmd_paired_drift",
-    orientation=DISTANCE,
-    description=(
-        "Primary-layer client-level paired MMD^2 (B - W), mean over the last "
-        "evaluation.summary_window evaluations"
-    ),
-    trajectory_key="mmd_paired_{layer}_drift",
-)
+_BASE_METRICS = [
+    # (name, alias, orientation, display, description)
+    ("cka", "cka_client_between", SIMILARITY, "1 - CKA, between communities",
+     "Primary-layer linear CKA averaged over client pairs in different "
+     "communities (client level, as in the proposal)"),
+    ("cka_bw", "cka_client_drift", DISTANCE, "CKA divergence, between - within",
+     "Primary-layer client CKA divergence between communities minus within "
+     "communities: (1 - CKA_between) - (1 - CKA_within)"),
+    ("cka_community", "cka_cross_community", SIMILARITY, "1 - CKA, community-averaged",
+     "Legacy: primary-layer linear CKA between community-averaged "
+     "embeddings (mean off-diagonal)"),
+    ("mmd", "mmd_paired_between", DISTANCE, "MMD^2, between communities",
+     "Primary-layer paired MMD^2 averaged over client pairs in different "
+     "communities"),
+    ("mmd_bw", "mmd_paired_drift", DISTANCE, "MMD^2, between - within",
+     "Primary-layer paired MMD^2 between communities minus within "
+     "communities (B - W)"),
+]
+
+#: Named metrics. ``cka`` (client-level, between communities) is the
+#: paper's primary metric. Each also has a ``<name>_window`` variant: the
+#: mean over the last ``evaluation.summary_window_rounds`` rounds.
+DRIFT_METRICS: Dict[str, DriftMetric] = {}
+for _name, _alias, _orient, _display, _desc in _BASE_METRICS:
+    DRIFT_METRICS[_name] = DriftMetric(
+        name=_name,
+        column=f"final_{_alias}",
+        orientation=_orient,
+        description=f"{_desc}, final evaluation",
+        trajectory_key=PRIMARY_ALIASES[_alias],
+        display=_display,
+    )
+    DRIFT_METRICS[f"{_name}_window"] = DriftMetric(
+        name=f"{_name}_window",
+        column=f"window_{_alias}",
+        orientation=_orient,
+        description=f"{_desc}, mean over the last evaluation.summary_window_rounds rounds",
+        trajectory_key=PRIMARY_ALIASES[_alias],
+        display=f"{_display} (window)",
+    )
 
 DEFAULT_METRIC = "cka"
 
@@ -306,6 +321,8 @@ def assign_factorial_cells(
     df: pd.DataFrame,
     data_col: str = "data_regime",
     network_col: str = "network_regime",
+    alpha_col: str = "dirichlet_alpha",
+    pout_col: str = "p_out",
 ) -> pd.Series:
     """Label each run with its 2x2 factorial cell (A, B, C or D).
 
@@ -322,6 +339,13 @@ def assign_factorial_cells(
         Table with one row per run.
     data_col, network_col:
         Column names of the two factors.
+    alpha_col, pout_col:
+        Optional level columns. ``data_regime`` is only the partition
+        method and ``network_regime`` only the topology name, so different
+        Dirichlet alphas, or different SBM ``p_out`` values, share a label.
+        If these columns are present, more than one level among non-IID
+        runs (alpha) or community-structured runs (p_out) is an error
+        rather than being pooled into one cell.
 
     Returns
     -------
@@ -333,7 +357,8 @@ def assign_factorial_cells(
     ValueError
         If a topology is not recognised, more than one non-IID data
         regime or more than one topology per level is present (the design
-        is not a 2x2), or a cell has no runs.
+        is not a 2x2), levels of alpha or p_out would be pooled, or a cell
+        has no runs.
     """
     unknown = sorted({
         str(v) for v in df[network_col].unique() if _network_level(v) is None
@@ -362,6 +387,27 @@ def assign_factorial_cells(
 
     iid = df[data_col].map(_is_iid)
     net = df[network_col].map(_network_level)
+
+    def distinct(col: str, mask: pd.Series) -> List[float]:
+        if col not in df.columns:
+            return []
+        vals = pd.to_numeric(df.loc[mask, col], errors="coerce").dropna().unique()
+        return sorted(float(v) for v in vals)
+
+    alphas = distinct(alpha_col, ~iid)
+    if len(alphas) > 1:
+        raise ValueError(
+            f"Non-IID runs have {len(alphas)} different {alpha_col} values {alphas}: "
+            "not a 2x2 design. Analyse one alpha level at a time (e.g. point "
+            "--results_dir at a folder with a single level)."
+        )
+    pouts = distinct(pout_col, net == "community")
+    if len(pouts) > 1:
+        raise ValueError(
+            f"Community-structured runs have {len(pouts)} different {pout_col} "
+            f"values {pouts}: not a 2x2 design. Analyse one p_out level at a time, "
+            "or use --analysis surface for sweeps."
+        )
     cells = pd.Series(index=df.index, dtype=object)
     cells[iid & (net == "dense")] = "A"
     cells[~iid & (net == "dense")] = "B"

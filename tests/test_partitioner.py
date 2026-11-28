@@ -116,15 +116,42 @@ class TestBetweenCommunityDirichlet:
 
     CLUSTERS = {0: [0, 1, 2], 1: [3, 4, 5], 2: [6, 7, 8], 3: [9, 10, 11]}
 
-    def _partitioner(self, alpha, between="dirichlet", clusters=CLUSTERS, n_classes=12):
+    def _partitioner(self, alpha, between="dirichlet", clusters=CLUSTERS, n_classes=12,
+                     alpha_within=None):
         targets = np.repeat(np.arange(n_classes), 400)
         ds = _SyntheticDataset(len(targets), n_classes)
         ds.targets = list(targets)
         comm = {c: list(range(4 * c, 4 * c + 4)) for c in range(4)}
         return SemanticPartitioner(
             ds, clusters, comm, alpha, "dirichlet_semantic", 42, 16,
-            between_community=between,
+            between_community=between, alpha_within=alpha_within,
         )
+
+    @pytest.mark.parametrize("alpha", [10.0, 0.5, 0.05])
+    def test_within_community_split_is_iid_by_default(self, alpha):
+        """Equal client sizes inside a community and near-identical label mixes."""
+        p = self._partitioner(alpha)
+        result = p.partition()
+        for c in range(4):
+            sizes = [len(result[cid]) for cid in range(4 * c, 4 * c + 4)]
+            assert max(sizes) - min(sizes) <= 1
+        # ~0.1 is the sampling noise of a random split (~1200 samples, 12 classes)
+        assert p.within_community_label_distance(result) < 0.15
+        assert sorted(i for v in result.values() for i in v) == list(range(len(p.targets)))
+
+    def test_alpha_within_adds_within_community_skew(self):
+        iid = self._partitioner(0.5)
+        skew = self._partitioner(0.5, alpha_within=0.1)
+        assert skew.within_community_label_distance(skew.partition()) > 0.5
+        assert iid.within_community_label_distance(iid.partition()) < 0.15
+        # The between-community allocation is identical in both.
+        assert skew.community_label_distance(skew.partition()) == pytest.approx(
+            iid.community_label_distance(iid.partition()), abs=1e-12
+        )
+
+    def test_invalid_alpha_within(self):
+        with pytest.raises(ValueError, match="alpha_within"):
+            self._partitioner(1.0, alpha_within=0.0)
 
     @pytest.mark.parametrize("alpha", [100.0, 1.0, 0.1])
     def test_each_sample_assigned_exactly_once(self, alpha):

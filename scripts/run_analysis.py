@@ -302,6 +302,7 @@ def run_surface_analysis(
         "baseline_beta": sweep_data["baseline_beta"],
         "fit_params": surface_fit["params"],
         "r_squared": surface_fit["r_squared"],
+        "fitted": surface_fit.get("fitted", True),
         "metric": metric.name,
         "metric_column": metric.column,
         "orientation": metric.orientation,

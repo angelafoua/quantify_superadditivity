@@ -25,9 +25,12 @@ Between-community allocation (``between_community``)
     ``alpha`` therefore controls how different the communities' label
     distributions are: ``alpha -> inf`` gives the same label mix in every
     community (IID across communities), and ``alpha -> 0`` gives disjoint
-    semantic class sets. Within a community, samples are then split across
-    clients with ``Dir(alpha)``. Every sample is assigned to exactly one
-    client.
+    semantic class sets. Within a community, samples are split IID across
+    its clients by default (equal sizes, same label mix), so ``alpha``
+    affects only between-community heterogeneity and no client is
+    starved of data. Setting ``alpha_within`` instead splits each class
+    across the community's clients with ``Dir(alpha_within)``, a separate
+    within-community skew. Every sample is assigned to exactly one client.
 ``"disjoint"`` (legacy)
     Each community receives *all* samples of its pool's classes, so
     communities always have disjoint class sets and ``alpha`` acts only
@@ -78,6 +81,10 @@ class SemanticPartitioner:
     between_community:
         ``"dirichlet"`` (default) or ``"disjoint"`` (legacy); see the
         module docstring.
+    alpha_within:
+        Only for ``between_community="dirichlet"``: ``None`` (default)
+        splits each community's samples IID across its clients; a number
+        uses ``Dir(alpha_within)`` per class instead.
     """
 
     BETWEEN_COMMUNITY_MODES = ("dirichlet", "disjoint")
@@ -92,6 +99,7 @@ class SemanticPartitioner:
         run_seed: int,
         num_clients: int,
         between_community: str = "dirichlet",
+        alpha_within: Optional[float] = None,
     ) -> None:
         if mode not in ("iid", "dirichlet_semantic"):
             raise ValueError(f"Unknown partitioner mode: {mode!r}")
@@ -103,6 +111,9 @@ class SemanticPartitioner:
         if mode == "dirichlet_semantic" and not alpha > 0:
             raise ValueError(f"alpha must be positive, got {alpha}")
         self.between_community = between_community
+        if alpha_within is not None and not alpha_within > 0:
+            raise ValueError(f"alpha_within must be positive or None, got {alpha_within}")
+        self.alpha_within = alpha_within
 
         self.train_dataset = train_dataset
         self.semantic_clusters = semantic_clusters
@@ -224,12 +235,15 @@ class SemanticPartitioner:
         return counts
 
     def _partition_dirichlet_between(self) -> Dict[int, List[int]]:
-        """Home-sorted Dirichlet across communities, then Dirichlet within.
+        """Home-sorted Dirichlet across communities, then IID (or Dirichlet) within.
 
         See the module docstring (``between_community="dirichlet"``).
         """
         seed = derived_seed(self.run_seed, kind="dirichlet")
         rng = np.random.RandomState(seed)
+        # Separate stream for the within-community split, so the
+        # between-community allocation is identical whatever alpha_within is.
+        rng_within = np.random.RandomState(seed + 1)
 
         comm_ids = sorted(self.community_assignments.keys())
         K = len(comm_ids)
@@ -240,6 +254,7 @@ class SemanticPartitioner:
                 homes[cls].append(comm_id)
 
         result: Dict[int, List[int]] = {i: [] for i in range(self.num_clients)}
+        community_pool: Dict[int, List[int]] = {c: [] for c in comm_ids}
         for cls in range(self.num_classes):
             cls_idx = np.where(self.targets == cls)[0]
             if len(cls_idx) == 0:
@@ -260,20 +275,34 @@ class SemanticPartitioner:
                 ptr += n_comm
                 if n_comm == 0:
                     continue
+                if self.alpha_within is None:
+                    community_pool[comm_id].extend(comm_idx.tolist())
+                    continue
                 clients = self.community_assignments[comm_id]
-                client_props = rng.dirichlet(np.full(len(clients), self.alpha))
+                client_props = rng_within.dirichlet(np.full(len(clients), self.alpha_within))
                 client_counts = self._split_counts(n_comm, client_props)
                 cptr = 0
                 for cid, n_cl in zip(clients, client_counts, strict=True):
                     result[cid].extend(comm_idx[cptr: cptr + n_cl].tolist())
                     cptr += n_cl
 
+        if self.alpha_within is None:
+            # IID within each community: shuffle its pool, split into equal parts.
+            for comm_id in comm_ids:
+                pool = np.asarray(community_pool[comm_id], dtype=np.int64)
+                rng_within.shuffle(pool)
+                clients = self.community_assignments[comm_id]
+                for cid, part in zip(clients, np.array_split(pool, len(clients)), strict=True):
+                    result[cid].extend(part.tolist())
+
         self._fix_empty_clients(result)
         sizes = [len(v) for v in result.values()]
         logger.info(
-            "Dirichlet partition (between communities): alpha=%.3f, samples "
-            "per client min=%d, max=%d, mean=%.1f",
-            self.alpha, min(sizes), max(sizes), np.mean(sizes),
+            "Dirichlet partition (between communities): alpha=%.3f, within=%s, "
+            "samples per client min=%d, max=%d, mean=%.1f",
+            self.alpha,
+            "IID" if self.alpha_within is None else f"Dir({self.alpha_within})",
+            min(sizes), max(sizes), np.mean(sizes),
         )
         return result
 
@@ -325,6 +354,33 @@ class SemanticPartitioner:
             0.5 * float(np.abs(dists[a] - dists[b]).sum())
             for a in range(len(dists)) for b in range(a + 1, len(dists))
         ]
+        return float(np.mean(tv)) if tv else 0.0
+
+    def within_community_label_distance(self, assignment: Dict[int, List[int]]) -> float:
+        """Mean total-variation distance between label distributions of
+        clients in the same community (0 = identical label mix).
+
+        Parameters
+        ----------
+        assignment:
+            Output of :meth:`partition`.
+
+        Returns
+        -------
+        float
+            Mean over same-community client pairs.
+        """
+        def dist(idx: List[int]) -> np.ndarray:
+            counts = np.bincount(self.targets[idx], minlength=self.num_classes).astype(float)
+            return counts / max(counts.sum(), 1.0)
+
+        tv = []
+        for clients in self.community_assignments.values():
+            d = [dist(assignment[c]) for c in clients]
+            tv += [
+                0.5 * float(np.abs(d[a] - d[b]).sum())
+                for a in range(len(d)) for b in range(a + 1, len(d))
+            ]
         return float(np.mean(tv)) if tv else 0.0
 
     def _partition_dirichlet_semantic(self) -> Dict[int, List[int]]:

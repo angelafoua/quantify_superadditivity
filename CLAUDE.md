@@ -17,7 +17,9 @@ The headline quantity is the **interaction term**:
 I = Drift(D) - Drift(B) - Drift(C) + Drift(A)
 ```
 where A/B/C/D are the four cells of a 2×2 factorial (IID/Non-IID × Dense/Community),
-and Drift is measured via layer-wise CKA on a fixed probe set.
+and Drift is measured via layer-wise CKA between clients on a fixed probe set
+(primary: 1 − mean CKA over client pairs in different communities; see
+`superadditivity/analysis/drift_metrics.py` for all analysable metrics).
 
 ## Mental model of the pipeline
 
@@ -83,8 +85,9 @@ else is library code under `superadditivity/`.
 - **IID** — uniform random assignment
 - **Dirichlet semantic** — label skew via Dirichlet(α): each class is split across
   communities by a sorted Dir(α) draw (largest share to its semantic-cluster home
-  community), then across clients by Dir(α), so α controls between-community
-  heterogeneity (`between_community: dirichlet`; `disjoint` = legacy split)
+  community), then IID across the community's clients, so α controls only
+  between-community heterogeneity (`alpha_within` adds optional within-community
+  skew; `between_community: disjoint` = legacy split)
 - **Quantity skew** — IID labels but Dirichlet-skewed sample counts (negative control)
 
 ## Invariants that MUST hold (do not break these)

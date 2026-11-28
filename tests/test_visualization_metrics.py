@@ -47,8 +47,8 @@ def _make_results(root: Path, n_seeds: int = 3) -> None:
             for i, r in enumerate(_ROUNDS):
                 frac = i / (len(_ROUNDS) - 1)
                 tracker.record(r, {
-                    "cka_layer4_mean": 1.0 - frac * (1.0 - final_cka),
-                    "mmd_paired_layer4_drift": frac * final_mmd,
+                    "cka_client_layer4_between": 1.0 - frac * (1.0 - final_cka),
+                    "mmd_paired_layer4_between": frac * final_mmd,
                 })
             tracker.save()
             (run_dir / "summary.json").write_text(json.dumps({
@@ -56,8 +56,8 @@ def _make_results(root: Path, n_seeds: int = 3) -> None:
                 "network_regime": net,
                 "run_seed": seed,
                 "graph_seed": 100,
-                "final_cka_cross_community": final_cka,
-                "final_mmd_paired_drift": final_mmd,
+                "final_cka_client_between": final_cka,
+                "final_mmd_paired_between": final_mmd,
             }))
 
 
@@ -80,7 +80,7 @@ class TestPlotFunctions:
         df = pd.DataFrame({
             "data_regime": ["iid", "iid", "noniid", "noniid"],
             "network_regime": ["er", "sbm", "er", "sbm"],
-            "final_cka_cross_community": [0.9, 0.8, 0.8, 0.5],
+            "final_cka_client_between": [0.9, 0.8, 0.8, 0.5],
         })
         fig = plot_factorial_grid(df, drift_metric=resolve_drift_metric("cka"))
         annotations = sorted(float(t.get_text()) for t in fig.axes[0].texts)
@@ -89,7 +89,7 @@ class TestPlotFunctions:
 
     def test_factorial_grid_missing_column(self):
         df = pd.DataFrame({"data_regime": ["iid"], "network_regime": ["er"]})
-        with pytest.raises(ValueError, match="final_mmd_paired_drift"):
+        with pytest.raises(ValueError, match="final_mmd_paired_between"):
             plot_factorial_grid(df, drift_metric=resolve_drift_metric("mmd"))
 
     def test_bar_draws_additive_prediction(self):
@@ -105,7 +105,7 @@ class TestPlotFunctions:
 class TestTrajectoryLoading:
     def test_loads_by_recorded_key_with_regimes(self, tmp_path):
         _make_results(tmp_path, n_seeds=1)
-        runs = ResultAggregator(str(tmp_path)).load_trajectories("cka_layer4_mean")
+        runs = ResultAggregator(str(tmp_path)).load_trajectories("cka_client_layer4_between")
         assert len(runs) == 4
         for run in runs:
             np.testing.assert_array_equal(run["rounds"], _ROUNDS)
