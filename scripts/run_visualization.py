@@ -38,6 +38,7 @@ from superadditivity.analysis.drift_metrics import (
     DEFAULT_METRIC,
     DRIFT_METRICS,
     ORIENTATIONS,
+    TRANSFORMS,
     DriftMetric,
     assign_factorial_cells,
     output_subdir,
@@ -70,7 +71,7 @@ def _results_fingerprint(
     """Hash summaries, analysis JSON and the metric to detect stale figures."""
     metric = metric or resolve_drift_metric()
     md5 = hashlib.md5()
-    md5.update(f"{metric.column}|{metric.orientation}|{layer}".encode())
+    md5.update(f"{metric.column}|{metric.orientation}|{metric.transform}|{layer}".encode())
     for p in _find_summaries(results_dir):
         try:
             md5.update(p.read_bytes())
@@ -166,9 +167,12 @@ def plot_interaction_bar_figure(
     test_path = results_dir / output_subdir(metric, "analysis") / "interaction_test.json"
     if test_path.exists():
         test = load_json(test_path)
-        if test.get("metric_column") == metric.column and test.get(
-            "orientation"
-        ) == metric.orientation and np.isclose(test.get("I_observed", np.nan), I):
+        if (
+            test.get("metric_column") == metric.column
+            and test.get("orientation") == metric.orientation
+            and test.get("transform", "none") == metric.transform
+            and np.isclose(test.get("I_observed", np.nan), I)
+        ):
             ci = (test["I_ci_lower"], test["I_ci_upper"])
             p_value = test["p_value"]
             n_boot = test.get("n_bootstrap")
@@ -235,11 +239,14 @@ def plot_trajectory_figure(
         cells = assign_factorial_cells(labels_df)
         labels = [f"{c}: {CELL_LABELS[c]}" for c in cells]
     except ValueError:
-        labels = [f"{d} + {n}" for d, n in zip(labels_df["data_regime"], labels_df["network_regime"])]
+        labels = [
+            f"{d} + {n}"
+            for d, n in zip(labels_df["data_regime"], labels_df["network_regime"], strict=True)
+        ]
 
     grouped: Dict[str, List[np.ndarray]] = defaultdict(list)
     rounds_by_label: Dict[str, np.ndarray] = {}
-    for label, run in zip(labels, runs):
+    for label, run in zip(labels, runs, strict=True):
         grouped[label].append(metric.to_drift(run["values"]))
         prev = rounds_by_label.get(label)
         if prev is None or len(run["rounds"]) < len(prev):
@@ -291,13 +298,23 @@ def main() -> None:
         help="For a raw --metric column: 'similarity' or 'distance'.",
     )
     parser.add_argument(
-        "--layer", default="layer4",
-        help="Layer for the drift trajectory plot (default: layer4).",
+        "--layer", default=None,
+        help=(
+            "Layer for the drift trajectory plot. Default: the runs' primary "
+            "layer (summary.json 'primary_layer'), else layer4."
+        ),
+    )
+    parser.add_argument(
+        "--transform", default="none", choices=list(TRANSFORMS),
+        help=(
+            "Monotone transform of drift before analysis (scale-robustness "
+            "check): none, log (drift > 0) or logit (0 < drift < 1, e.g. 1 - CKA)."
+        ),
     )
     args = parser.parse_args()
 
     try:
-        metric = resolve_drift_metric(args.metric, args.orientation)
+        metric = resolve_drift_metric(args.metric, args.orientation, args.transform)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -305,7 +322,19 @@ def main() -> None:
     fig_dir = Path(args.output_dir or str(results_dir / output_subdir(metric, "figures")))
     ensure_dir(fig_dir)
 
-    if not args.force and _is_viz_current(fig_dir, results_dir, metric, args.layer):
+    agg = ResultAggregator(str(results_dir))
+    df = agg.load_summaries()
+    if df.empty:
+        logger.error("No data found in %s", results_dir)
+        return
+    layer = args.layer
+    if layer is None:
+        if "primary_layer" in df.columns and df["primary_layer"].notna().any():
+            layer = str(df["primary_layer"].dropna().mode().iloc[0])
+        else:
+            layer = "layer4"
+
+    if not args.force and _is_viz_current(fig_dir, results_dir, metric, layer):
         logger.info(
             "Figures are up to date (inputs unchanged). Use --force to regenerate."
         )
@@ -314,12 +343,6 @@ def main() -> None:
     _invalidate_viz_fingerprint(fig_dir)
     set_publication_style()
 
-    agg = ResultAggregator(str(results_dir))
-    df = agg.load_summaries()
-
-    if df.empty:
-        logger.error("No data found in %s", results_dir)
-        return
 
     if "data_regime" in df.columns and "network_regime" in df.columns:
         if metric.column in df.columns:
@@ -341,8 +364,12 @@ def main() -> None:
                 "Summaries have no %s column; skipping factorial figures.", metric.column
             )
 
-    if plot_trajectory_figure(agg, metric, args.layer, fig_dir / "drift_trajectories.pdf"):
-        logger.info("Generated drift trajectories")
+    try:
+        if plot_trajectory_figure(agg, metric, layer, fig_dir / "drift_trajectories.pdf"):
+            logger.info("Generated drift trajectories")
+    except ValueError as exc:
+        # e.g. a log/logit transform of a trajectory that starts at drift 0
+        logger.warning("Skipping drift trajectories: %s", exc)
 
     surface_path = (
         results_dir / output_subdir(metric, "analysis") / "interaction_surface.json"
@@ -352,8 +379,10 @@ def main() -> None:
 
         surface_data = load_json(surface_path)
         # Older surface files carry no metric and were computed on raw CKA.
-        if surface_data.get("metric_column", metric.column) != metric.column or (
-            "orientation" not in surface_data
+        if (
+            surface_data.get("metric_column", metric.column) != metric.column
+            or "orientation" not in surface_data
+            or surface_data.get("transform", "none") != metric.transform
         ):
             logger.warning(
                 "%s was not computed on %s in drift orientation; re-run "
@@ -371,7 +400,7 @@ def main() -> None:
             plt.close(fig)
             logger.info("Generated interaction surface")
 
-    _write_viz_fingerprint(fig_dir, results_dir, metric, args.layer)
+    _write_viz_fingerprint(fig_dir, results_dir, metric, layer)
     logger.info("All figures saved to %s", fig_dir)
 
 

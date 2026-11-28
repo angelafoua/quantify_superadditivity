@@ -30,17 +30,17 @@ from superadditivity.analysis.drift_metrics import (
     DEFAULT_METRIC,
     DRIFT_METRICS,
     ORIENTATIONS,
+    TRANSFORMS,
     DriftMetric,
     output_subdir,
     resolve_drift_metric,
 )
 from superadditivity.analysis.anova import two_way_anova, functional_anova
-from superadditivity.analysis.effect_sizes import bootstrap_ci
 from superadditivity.analysis.interaction_analyzer import InteractionAnalyzer
 from superadditivity.analysis.mixed_effects import fit_mixed_effects
 from superadditivity.analysis.multiple_comparisons import pairwise_ttests
 from superadditivity.analysis.statistical_report import StatisticalReport
-from superadditivity.utils.io import ensure_dir, save_json, load_json
+from superadditivity.utils.io import ensure_dir, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def _summaries_fingerprint(
     """Hash all summary.json files (and the metric) for change detection."""
     metric = metric or resolve_drift_metric()
     md5 = hashlib.md5()
-    md5.update(f"{metric.column}|{metric.orientation}".encode())
+    md5.update(f"{metric.column}|{metric.orientation}|{metric.transform}".encode())
     for p in _find_summaries(results_dir):
         md5.update(p.read_bytes())
     return md5.hexdigest()
@@ -78,8 +78,12 @@ def default_output_dir(results_dir: str, metric: DriftMetric) -> str:
 
 
 def _metric_section(metric: DriftMetric) -> str:
+    transform_note = (
+        "" if metric.transform == "none"
+        else f"\n- **Transform:** {metric.transform} (scale-robustness check)"
+    )
     return (
-        f"- **Metric:** `{metric.name}`: {metric.description}\n"
+        f"- **Metric:** `{metric.name}`: {metric.description}{transform_note}\n"
         f"- **Summary column:** `{metric.column}` ({metric.orientation})\n"
         f"- **{metric.drift_definition}** (higher = more drift)\n"
         f"- **Interaction:** I = Drift(D) - Drift(B) - Drift(C) + Drift(A); "
@@ -177,8 +181,9 @@ def run_factorial_analysis(
     func_anova = functional_anova(df, n_permutations=10000, seed=42)
     report.add_section(
         "Permutation ANOVA",
-        f"Interaction F={func_anova['observed_F']:.4f}, "
-        f"permutation p={func_anova['perm_p_value']:.4g}",
+        f"{func_anova['method']}: interaction F={func_anova['observed_F']:.4f}, "
+        f"permutation p="
+        f"{StatisticalReport.format_p(func_anova['perm_p_value'], func_anova['n_permutations'])}",
     )
 
     groups = {}
@@ -191,11 +196,24 @@ def run_factorial_analysis(
 
     # Cells are assigned in build_factorial_table (A/B/C/D); a design
     # that is not 2x2 raises there instead of silently skipping the test.
+    # Primary test pairs runs by run_seed (shared initial weights and data
+    # partition across cells). The independent-cells bootstrap is kept as a
+    # secondary analysis.
     cell_values = {c: df.loc[df["cell"] == c, "metric"].values for c in "ABCD"}
-    interaction_result = InteractionAnalyzer.bootstrap_interaction_test(
+    independent = InteractionAnalyzer.bootstrap_interaction_test(
         cell_values["A"], cell_values["B"], cell_values["C"], cell_values["D"],
         n_bootstrap=10000, seed=42,
     )
+    independent.pop("bootstrap_distribution", None)
+    if "run_seed" in df.columns and df["run_seed"].notna().all():
+        interaction_result = InteractionAnalyzer.paired_interaction_test(
+            {c: df[df["cell"] == c] for c in "ABCD"}, unit_col="run_seed",
+            n_bootstrap=10000, seed=42,
+        )
+        interaction_result["independent_bootstrap"] = independent
+    else:
+        logger.warning("No run_seed column: using the independent-cells bootstrap.")
+        interaction_result = independent
     report.add_interaction_results(interaction_result)
     cell_info = {}
     for c in "ABCD":
@@ -214,6 +232,7 @@ def run_factorial_analysis(
             "metric": metric.name,
             "metric_column": metric.column,
             "orientation": metric.orientation,
+            "transform": metric.transform,
             "drift_definition": metric.drift_definition,
             "cells": cell_info,
         },
@@ -275,11 +294,18 @@ def run_surface_analysis(
         "alpha_values": sweep_data["alpha_values"].tolist(),
         "beta_values": sweep_data["beta_values"].tolist(),
         "I_values": sweep_data["I_values"].tolist(),
+        "I_ci_lower": sweep_data["I_ci_lower"].tolist(),
+        "I_ci_upper": sweep_data["I_ci_upper"].tolist(),
+        "p_values": sweep_data["p_values"].tolist(),
+        "n_units": sweep_data["n_units"].tolist(),
+        "baseline_alpha": sweep_data["baseline_alpha"],
+        "baseline_beta": sweep_data["baseline_beta"],
         "fit_params": surface_fit["params"],
         "r_squared": surface_fit["r_squared"],
         "metric": metric.name,
         "metric_column": metric.column,
         "orientation": metric.orientation,
+        "transform": metric.transform,
         "drift_definition": metric.drift_definition,
     }, Path(output_dir) / "interaction_surface.json")
 
@@ -288,6 +314,22 @@ def run_surface_analysis(
         output_path=str(Path(output_dir) / "surface_report.md"),
     )
     report.add_section("Drift Metric", _metric_section(metric))
+    point_lines = [
+        f"Reference cell: alpha = {sweep_data['baseline_alpha']} (IID if inf), "
+        f"p_out = {sweep_data['baseline_beta']}. Points on the reference row or "
+        "column are omitted (I = 0 by construction).",
+        "",
+        "| alpha | p_out | I | 95% CI | p (I <= 0) | seeds |",
+        "|---|---|---|---|---|---|",
+    ]
+    for i in range(len(sweep_data["I_values"])):
+        point_lines.append(
+            f"| {sweep_data['alpha_values'][i]:g} | {sweep_data['beta_values'][i]:g} "
+            f"| {sweep_data['I_values'][i]:.4g} "
+            f"| [{sweep_data['I_ci_lower'][i]:.4g}, {sweep_data['I_ci_upper'][i]:.4g}] "
+            f"| {sweep_data['p_values'][i]:.3g} | {sweep_data['n_units'][i]} |"
+        )
+    report.add_section("Interaction per sweep point", "\n".join(point_lines))
     report.add_surface_fit_results(surface_fit)
     report.save()
 
@@ -323,10 +365,17 @@ def main() -> None:
             "'distance' (drift = value)."
         ),
     )
+    parser.add_argument(
+        "--transform", default="none", choices=list(TRANSFORMS),
+        help=(
+            "Monotone transform of drift before analysis (scale-robustness "
+            "check): none, log (drift > 0) or logit (0 < drift < 1, e.g. 1 - CKA)."
+        ),
+    )
     args = parser.parse_args()
 
     try:
-        metric = resolve_drift_metric(args.metric, args.orientation)
+        metric = resolve_drift_metric(args.metric, args.orientation, args.transform)
     except ValueError as exc:
         parser.error(str(exc))
 

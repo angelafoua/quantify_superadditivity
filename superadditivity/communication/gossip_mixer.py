@@ -29,10 +29,14 @@ class _HasModel(Protocol):
 class GossipMixer:
     """Apply doubly-stochastic mixing matrix ``W`` to client parameters.
 
-    Only trainable parameters are mixed.  BatchNorm running statistics
-    (``running_mean``, ``running_var``, ``num_batches_tracked``) are
-    buffers, not parameters, and are excluded from the gossip average so
-    each client retains its own local batch-statistics estimate.
+    By default only trainable parameters are mixed. BatchNorm running
+    statistics (``running_mean``, ``running_var``) are buffers, not
+    parameters, and are then excluded from the gossip average, so each
+    client keeps batch statistics of its *own* data and evaluates with
+    them. Under non-IID data part of the measured representation drift
+    then comes from these local statistics. With ``mix_buffers=True`` all
+    floating-point buffers are mixed with the same ``W``; integer buffers
+    (``num_batches_tracked``) are never mixed.
 
     Parameters
     ----------
@@ -42,25 +46,35 @@ class GossipMixer:
     dtype:
         Floating-point dtype for the mixing computation. Must be at least
         float64 for numerical stability with large networks.
+    mix_buffers:
+        Also mix floating-point buffers (BatchNorm running statistics).
     """
 
     def __init__(
         self,
         mix_device: str = "cpu",
         dtype: torch.dtype = torch.float64,
+        mix_buffers: bool = False,
     ) -> None:
         self.mix_device = torch.device(mix_device)
         self.dtype = dtype
+        self.mix_buffers = bool(mix_buffers)
         logger.info(
-            "GossipMixer initialised (device=%s, dtype=%s)",
+            "GossipMixer initialised (device=%s, dtype=%s, mix_buffers=%s)",
             self.mix_device,
             self.dtype,
+            self.mix_buffers,
         )
 
-    @staticmethod
-    def _param_keys(model: nn.Module) -> frozenset[str]:
-        """Return the state-dict keys that correspond to trainable parameters."""
-        return frozenset(name for name, _ in model.named_parameters())
+    def _param_keys(self, model: nn.Module) -> frozenset[str]:
+        """State-dict keys to mix: parameters, plus float buffers if enabled."""
+        keys = {name for name, _ in model.named_parameters()}
+        if self.mix_buffers:
+            keys |= {
+                name for name, buf in model.named_buffers()
+                if torch.is_floating_point(buf)
+            }
+        return frozenset(keys)
 
     def mix(
         self,
@@ -153,15 +167,17 @@ class GossipMixer:
         set of model tensors on the original device, which would otherwise
         double GPU memory for all N clients simultaneously.
 
-        Buffers (e.g. BatchNorm running stats) are not parameters and are
-        left untouched — each client keeps its own local batch-statistics.
+        Buffers (e.g. BatchNorm running stats) are mixed only when
+        ``mix_buffers`` is set; otherwise each client keeps its own.
         """
         param_keys = self._param_keys(clients[0].model)
 
-        # Build a {name: param} lookup for every client so we can write
+        # Build a {name: tensor} lookup for every client so we can write
         # mixed values back in-place without load_state_dict.
-        client_params: List[Dict[str, nn.Parameter]] = [
-            dict(clients[i].model.named_parameters()) for i in range(n)
+        client_params: List[Dict[str, torch.Tensor]] = [
+            {**dict(clients[i].model.named_parameters()),
+             **dict(clients[i].model.named_buffers())}
+            for i in range(n)
         ]
 
         for name in client_params[0]:

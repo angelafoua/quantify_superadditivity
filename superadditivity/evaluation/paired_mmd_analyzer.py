@@ -15,13 +15,18 @@ community-level :class:`~superadditivity.evaluation.mmd_analyzer.MMDAnalyzer`
    The independent-sample estimator includes ``k(x_i, y_i)`` in the cross
    term and is biased downward when ``x_i`` and ``y_i`` are correlated.
 3. **One kernel per evaluation.** A Gaussian RBF kernel is used, with a
-   single bandwidth for all client pairs at a given evaluation: the median
-   pairwise Euclidean distance of a fixed-index subsample of the pooled
-   embeddings of all clients. All pairs are then measured with the same
-   kernel, and the metric is invariant to a global rescaling of the
-   features, so feature-norm growth during training is not counted as
-   drift. Additional bandwidths (multiples of the median) are computed
-   for sensitivity analysis.
+   single bandwidth for all client pairs at a given evaluation. By default
+   (``bandwidth_reference="within_client"``) it is the median Euclidean
+   distance between *different probe images within the same client*,
+   pooled over clients. This measures the spread of the representation
+   itself: drift *between* clients does not inflate it. The rule
+   ``"pooled"`` instead takes the median over all clients' embeddings
+   pooled together; there, larger drift widens the kernel and makes MMD
+   less sensitive, biasing a superadditive interaction towards 0. Either
+   way all pairs use the same kernel, and the metric is invariant to a
+   global rescaling of the features, so feature-norm growth during
+   training is not counted as drift. Additional bandwidths (multiples of
+   the median) are computed for sensitivity analysis.
 4. **Aggregation and inference.** The drift statistic is
    ``B - W``: the mean MMD^2 over client pairs in *different* communities
    minus the mean over pairs in the *same* community. ``W`` is the noise
@@ -42,7 +47,7 @@ Gretton, A., Borgwardt, K. M., Rasch, M. J., Schölkopf, B., & Smola, A.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Sequence
 
 import numpy as np
 import torch
@@ -64,6 +69,19 @@ def multiplier_tag(multiplier: float) -> str:
         Tag such as ``"bw0p25"`` (``.`` replaced by ``p``).
     """
     return "bw" + f"{float(multiplier):g}".replace(".", "p").replace("-", "m")
+
+
+def _median(values: torch.Tensor) -> float:
+    """Standard median (mean of the two middle values for an even count).
+
+    ``torch.median`` returns the lower middle value instead.
+    """
+    sorted_vals, _ = torch.sort(values.reshape(-1))
+    k = sorted_vals.numel()
+    mid = k // 2
+    if k % 2:
+        return float(sorted_vals[mid].item())
+    return float(((sorted_vals[mid - 1] + sorted_vals[mid]) / 2).item())
 
 
 def median_bandwidth(
@@ -99,7 +117,42 @@ def median_bandwidth(
         pts = pooled
     dists = torch.cdist(pts, pts)
     iu = torch.triu_indices(pts.shape[0], pts.shape[0], offset=1, device=pts.device)
-    median = float(dists[iu[0], iu[1]].median().item())
+    median = _median(dists[iu[0], iu[1]])
+    return max(median, 1e-12)
+
+
+def within_client_median_bandwidth(
+    embeddings: torch.Tensor,
+    subsample: int,
+    seed: int,
+) -> float:
+    """Median distance between different probe images within each client.
+
+    Parameters
+    ----------
+    embeddings:
+        Shape ``(C, n, d)``.
+    subsample:
+        Total number of points over all clients; each client uses the same
+        ``max(2, subsample // C)`` image indices (at most ``n``), chosen
+        with a generator seeded by ``seed``.
+    seed:
+        Seed for the image indices.
+
+    Returns
+    -------
+    float
+        Median of the pooled within-client pairwise distances, clamped to
+        at least ``1e-12``.
+    """
+    C, n, _ = embeddings.shape
+    per_client = min(n, max(2, subsample // max(C, 1)))
+    gen = torch.Generator(device="cpu").manual_seed(int(seed))
+    idx = torch.randperm(n, generator=gen)[:per_client].to(embeddings.device)
+    pts = embeddings[:, idx]                                   # (C, m, d)
+    dists = torch.cdist(pts, pts)                              # (C, m, m)
+    iu = torch.triu_indices(per_client, per_client, offset=1, device=pts.device)
+    median = _median(dists[:, iu[0], iu[1]].reshape(-1))
     return max(median, 1e-12)
 
 
@@ -261,6 +314,9 @@ class PairedMMDAnalyzer:
     bandwidth_seed:
         Seed for the median-heuristic subsample indices. Keep it fixed
         across runs.
+    bandwidth_reference:
+        ``"within_client"`` (default) or ``"pooled"``; see the module
+        docstring.
     n_permutations:
         Permutations for the descriptive community-label test of ``B - W``
         (primary bandwidth only). ``0`` disables the test.
@@ -286,7 +342,14 @@ class PairedMMDAnalyzer:
         n_permutations: int = 10000,
         permutation_seed: int = 0,
         device: str = "cpu",
+        bandwidth_reference: str = "within_client",
     ) -> None:
+        if bandwidth_reference not in ("within_client", "pooled"):
+            raise ValueError(
+                "bandwidth_reference must be 'within_client' or 'pooled', "
+                f"got {bandwidth_reference!r}"
+            )
+        self.bandwidth_reference = bandwidth_reference
         mults = [float(m) for m in bandwidth_multipliers]
         if self.PRIMARY_MULTIPLIER not in mults:
             raise ValueError(
@@ -350,14 +413,19 @@ class PairedMMDAnalyzer:
         )
         labels = np.array([community_map[c] for c in client_ids])
 
-        sigma = median_bandwidth(
-            X.reshape(-1, X.shape[-1]), self.bandwidth_subsample, self.bandwidth_seed
-        )
+        if self.bandwidth_reference == "within_client":
+            sigma = within_client_median_bandwidth(
+                X, self.bandwidth_subsample, self.bandwidth_seed
+            )
+        else:
+            sigma = median_bandwidth(
+                X.reshape(-1, X.shape[-1]), self.bandwidth_subsample, self.bandwidth_seed
+            )
         sigmas = [sigma * m for m in self.bandwidth_multipliers]
         mats = paired_mmd2_matrix(X, sigmas).cpu().numpy()
 
         sensitivity: Dict[float, Dict[str, float]] = {}
-        for m, mat in zip(self.bandwidth_multipliers, mats):
+        for m, mat in zip(self.bandwidth_multipliers, mats, strict=True):
             sensitivity[m] = between_within(mat, labels)
 
         primary_idx = self.bandwidth_multipliers.index(self.PRIMARY_MULTIPLIER)

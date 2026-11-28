@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -75,17 +74,28 @@ class ResultAggregator:
                     if m:
                         data["p_out"] = float(m.group(1))
                 if "data_regime" not in data:
-                    for regime in ("severe_noniid", "moderate_noniid", "mild_noniid", "iid"):
+                    for regime in (
+                        "severe_noniid", "moderate_noniid", "mild_noniid",
+                        "noniid", "iid",
+                    ):
                         if regime in combined:
                             data["data_regime"] = regime
                             break
+                # IID runs have no Dirichlet alpha; they are the alpha -> inf
+                # limit and the reference level of the p_out surface.
+                if data.get("dirichlet_alpha") is None and (
+                    str(data.get("data_regime", "")).lower() == "iid"
+                ):
+                    data["dirichlet_alpha"] = float("inf")
                 # Map data regime to dirichlet_alpha when absent
                 if "dirichlet_alpha" not in data and "data_regime" in data:
                     _alpha_map = {
-                        "iid": 1000.0,
-                        "mild_noniid": 1.0,
-                        "moderate_noniid": 0.3,
-                        "severe_noniid": 0.05,
+                        "iid": float("inf"),
+                        # Must match configs/data/*.yaml.
+                        "mild_noniid": 10.0,
+                        "moderate_noniid": 0.5,
+                        "noniid": 0.5,
+                        "severe_noniid": 0.1,
                     }
                     data["dirichlet_alpha"] = _alpha_map.get(data["data_regime"])
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import networkx as nx
 import numpy as np
-import pytest
 
 from superadditivity.graphs.mixing_matrix import (
     metropolis_hastings_weights,

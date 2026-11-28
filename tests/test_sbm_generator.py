@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from superadditivity.graphs.sbm_generator import SBMGenerator
 from superadditivity.graphs.mixing_matrix import metropolis_hastings_weights, is_doubly_stochastic
@@ -13,7 +12,7 @@ class TestSBMGenerator:
     def test_graph_is_connected(self):
         gen = SBMGenerator(n_clients=32, n_communities=4, p_in=0.5, p_out=0.05, seed=42)
         adjacency, community_map = gen.generate()
-        n = adjacency.shape[0]
+        adjacency.shape[0]
         import networkx as nx
         G = nx.from_numpy_array(adjacency)
         assert nx.is_connected(G)

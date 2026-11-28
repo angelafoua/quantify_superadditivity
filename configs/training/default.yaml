@@ -14,4 +14,9 @@ lr_schedule:
   warmup_rounds: 5
 
 eval_every: 10
+# Gossip BatchNorm running statistics as well as parameters. false: each
+# client keeps statistics of its own data (FedBN-style) and is evaluated
+# with them, so drift includes BatchNorm-statistic divergence. Run a
+# subset with true as a control.
+mix_bn_buffers: false
 checkpoint_every: 50

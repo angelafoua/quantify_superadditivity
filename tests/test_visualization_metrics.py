@@ -70,8 +70,10 @@ class TestPlotFunctions:
         means, cis, counts = factorial_cell_stats(table)
         assert means == {"A": 2.0, "B": 2.0, "C": 5.0, "D": 4.0}
         assert counts == {"A": 2, "B": 1, "C": 1, "D": 2}
-        sem_a = np.std([1.0, 3.0], ddof=1) / np.sqrt(2)
-        assert cis["A"] == pytest.approx((2.0 - 1.96 * sem_a, 2.0 + 1.96 * sem_a))
+        from scipy import stats
+
+        half = stats.t.ppf(0.975, 1) * np.std([1.0, 3.0], ddof=1) / np.sqrt(2)
+        assert cis["A"] == pytest.approx((2.0 - half, 2.0 + half))
         assert cis["B"] == (2.0, 2.0)
 
     def test_factorial_grid_shows_drift_not_similarity(self):

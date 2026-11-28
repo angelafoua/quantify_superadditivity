@@ -8,7 +8,7 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 
-from superadditivity.visualization.figure_style import WONG_COLORS, set_publication_style
+from superadditivity.visualization.figure_style import set_publication_style
 
 logger = logging.getLogger(__name__)
 

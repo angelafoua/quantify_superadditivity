@@ -82,7 +82,7 @@ def test_alphabetical_labels(root):
     assert train.classes == sorted(_class_names())
     assert train.class_to_idx == {c: i for i, c in enumerate(sorted(_class_names()))}
     for ds in (train, test):
-        for (path, label), t in zip(ds.samples, ds.targets):
+        for (path, label), t in zip(ds.samples, ds.targets, strict=False):
             assert Path(path).parent.name == ds.classes[label]
             assert t == label
             assert isinstance(t, int)
@@ -222,14 +222,18 @@ def test_targets_work_with_semantic_partitioner(root):
     train, _ = dn.build_domainnet126(root)
     clusters = DATASET_SPECS["domainnet126"].semantic_clusters
     communities = {k: [2 * k, 2 * k + 1] for k in range(4)}
-    for mode, alpha in (("iid", 1.0), ("dirichlet_semantic", 0.5)):
+    for mode, alpha, between in (
+        ("iid", 1.0, "dirichlet"),
+        ("dirichlet_semantic", 0.5, "dirichlet"),
+        ("dirichlet_semantic", 0.5, "disjoint"),
+    ):
         part = SemanticPartitioner(
             train, clusters, communities, alpha=alpha, mode=mode,
-            run_seed=0, num_clients=8,
+            run_seed=0, num_clients=8, between_community=between,
         ).partition()
         all_idx = sorted(i for idx in part.values() for i in idx)
         assert all_idx == list(range(len(train)))
-        if mode == "dirichlet_semantic":
+        if mode == "dirichlet_semantic" and between == "disjoint":
             for comm, clients in communities.items():
                 allowed = set(clusters[comm])
                 for c in clients:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def factorial_cell_stats(
     table: pd.DataFrame,
 ) -> Tuple[Dict[str, float], Dict[str, Tuple[float, float]], Dict[str, int]]:
-    """Per-cell mean drift and 95% normal-approximation CI.
+    """Per-cell mean drift and 95% t-based CI.
 
     Parameters
     ----------
@@ -33,8 +33,8 @@ def factorial_cell_stats(
     Returns
     -------
     tuple
-        ``(means, cis, counts)`` keyed by cell. CI = mean +/- 1.96 * SEM.
-        A cell with a single run gets a zero-width CI.
+        ``(means, cis, counts)`` keyed by cell. CI = mean +/- t(0.975,
+        n - 1) * SEM. A cell with a single run gets a zero-width CI.
     """
     means: Dict[str, float] = {}
     cis: Dict[str, Tuple[float, float]] = {}
@@ -43,10 +43,17 @@ def factorial_cell_stats(
         vals = table.loc[table["cell"] == cell, "metric"].to_numpy(dtype=np.float64)
         if len(vals) == 0:
             continue
+        from scipy import stats
+
         m = float(vals.mean())
-        sem = float(vals.std(ddof=1) / np.sqrt(len(vals))) if len(vals) > 1 else 0.0
+        if len(vals) > 1:
+            half = float(
+                stats.t.ppf(0.975, df=len(vals) - 1) * vals.std(ddof=1) / np.sqrt(len(vals))
+            )
+        else:
+            half = 0.0
         means[cell] = m
-        cis[cell] = (m - 1.96 * sem, m + 1.96 * sem)
+        cis[cell] = (m - half, m + half)
         counts[cell] = int(len(vals))
     return means, cis, counts
 
@@ -108,7 +115,7 @@ def plot_interaction_bar(
     means = [cell_means.get(k, 0) for k in cell_keys]
     colors = [WONG_COLORS[i] for i in range(4)]
 
-    bars = ax.bar(x, means, color=colors, alpha=0.8, edgecolor="black", linewidth=0.5)
+    ax.bar(x, means, color=colors, alpha=0.8, edgecolor="black", linewidth=0.5)
 
     if cell_cis:
         for i, k in enumerate(cell_keys):

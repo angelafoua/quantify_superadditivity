@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import copy
 import csv
-import json
 import random
-import shutil
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +16,6 @@ import torch
 from torch.utils.data import TensorDataset
 
 from superadditivity.logging.checkpoint_manager import (
-    CheckpointManager,
     TrainingCheckpointManager,
     _config_hash,
 )
@@ -615,7 +612,6 @@ class TestAnalysisCaching:
         """Fingerprint matches but output files deleted -> re-run."""
         from scripts.run_analysis import (
             _is_analysis_current,
-            _summaries_fingerprint,
             _write_fingerprint,
         )
 
@@ -637,7 +633,6 @@ class TestAnalysisCaching:
     def test_viz_missing_outputs_triggers_regeneration(self, tmp_path):
         from scripts.run_visualization import (
             _is_viz_current,
-            _results_fingerprint,
             _write_viz_fingerprint,
         )
 

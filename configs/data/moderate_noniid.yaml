@@ -3,4 +3,5 @@ data_dir: data/cifar100
 download: true
 partition_method: dirichlet_semantic
 dirichlet_alpha: 0.5
+between_community: dirichlet  # alpha controls between-community label skew; "disjoint" = legacy
 n_classes: 100

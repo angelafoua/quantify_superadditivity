@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 from omegaconf import DictConfig
@@ -224,33 +224,33 @@ class GraphManager:
         AssertionError
             If any invariant is violated.
         """
+        # Explicit checks, not `assert`: asserts are skipped under `python -O`.
+        def check(condition: bool, message: str) -> None:
+            if not condition:
+                raise AssertionError(message)
+
         W = self._mixing_matrix
         A = self._adjacency
-        assert W is not None and A is not None, "Nothing to validate -- call build()."
+        check(W is not None and A is not None, "Nothing to validate -- call build().")
 
         # Symmetry
-        assert np.allclose(W, W.T, atol=1e-12), (
-            "Mixing matrix is not symmetric."
-        )
+        check(bool(np.allclose(W, W.T, atol=1e-12)), "Mixing matrix is not symmetric.")
 
         # Doubly stochastic
-        assert is_doubly_stochastic(W, tol=1e-9), (
-            "Mixing matrix is not doubly stochastic."
-        )
+        check(is_doubly_stochastic(W, tol=1e-9), "Mixing matrix is not doubly stochastic.")
 
         # Weights only on edges or diagonal
         n = W.shape[0]
         for i in range(n):
             for j in range(n):
                 if i != j and W[i, j] > 1e-12:
-                    assert A[i, j] > 0, (
-                        f"W[{i},{j}]={W[i,j]:.6f} but A[{i},{j}]=0 (no edge)."
+                    check(
+                        A[i, j] > 0,
+                        f"W[{i},{j}]={W[i,j]:.6f} but A[{i},{j}]=0 (no edge).",
                     )
 
         # Zero diagonal in adjacency
-        assert np.allclose(np.diag(A), 0.0), (
-            "Adjacency matrix has non-zero diagonal."
-        )
+        check(bool(np.allclose(np.diag(A), 0.0)), "Adjacency matrix has non-zero diagonal.")
 
         logger.debug("Mixing matrix validation passed.")
 
@@ -274,9 +274,6 @@ class GraphManager:
 
         # Serialise community map as two arrays: keys and flat member lists
         comm_keys = np.array(sorted(self._communities.keys()), dtype=np.int64)  # type: ignore[union-attr]
-        comm_values = np.array(
-            [self._communities[k] for k in comm_keys], dtype=object  # type: ignore[union-attr]
-        )
         # Store lengths and flat values for reliable reconstruction
         comm_lengths = np.array(
             [len(self._communities[k]) for k in comm_keys], dtype=np.int64  # type: ignore[union-attr]
@@ -348,7 +345,7 @@ class GraphManager:
         if "metric_keys" in data and len(data["metric_keys"]) > 0:
             instance._metrics = {
                 str(k): float(v)
-                for k, v in zip(data["metric_keys"], data["metric_values"])
+                for k, v in zip(data["metric_keys"], data["metric_values"], strict=False)
             }
         else:
             instance._metrics = None

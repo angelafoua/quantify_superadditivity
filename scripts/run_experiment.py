@@ -57,7 +57,7 @@ from superadditivity.logging.checkpoint_manager import (
     TrainingCheckpointManager,
     _config_hash,
 )
-from superadditivity.utils.seed import set_all_seeds, derived_seed, PROBE_SEED, seed_worker
+from superadditivity.utils.seed import set_all_seeds, derived_seed, seed_worker
 from superadditivity.utils.device import select_device
 from superadditivity.utils.io import ensure_dir, save_json
 
@@ -197,6 +197,7 @@ def run(cfg: DictConfig) -> dict:
 
     # ---- Data partition ----
     logger.info("Partitioning data: method=%s", cfg.data.partition_method)
+    partition_stats: dict = {}
     if cfg.data.partition_method == "quantity_skew":
         qty_partitioner = QuantitySkewPartitioner(
             n_clients=cfg.n_clients,
@@ -220,8 +221,21 @@ def run(cfg: DictConfig) -> dict:
             mode=cfg.data.partition_method,
             run_seed=run_seed,
             num_clients=cfg.n_clients,
+            between_community=cfg.data.get("between_community", "dirichlet"),
         )
         partition_result = partitioner.partition()
+        partition_stats["community_label_tv"] = partitioner.community_label_distance(
+            partition_result
+        )
+        partition_stats["between_community"] = (
+            cfg.data.get("between_community", "dirichlet")
+            if cfg.data.partition_method == "dirichlet_semantic"
+            else None
+        )
+        logger.info(
+            "Mean total-variation distance between community label "
+            "distributions: %.3f", partition_stats["community_label_tv"],
+        )
         client_indices = [partition_result[i] for i in range(cfg.n_clients)]
         community_arr = _build_community_assignments_array(
             community_map, cfg.n_clients
@@ -308,6 +322,7 @@ def run(cfg: DictConfig) -> dict:
             n_permutations=int(pmmd_cfg.get("n_permutations", 10000)),
             permutation_seed=int(pmmd_cfg.get("permutation_seed", 0)),
             device=str(device),
+            bandwidth_reference=str(pmmd_cfg.get("bandwidth_reference", "within_client")),
         )
         layers_cfg = pmmd_cfg.get("layers", None)
         paired_mmd_layers = list(layers_cfg) if layers_cfg is not None else None
@@ -334,6 +349,11 @@ def run(cfg: DictConfig) -> dict:
         device=str(device),
         paired_mmd=paired_mmd,
         paired_mmd_layers=paired_mmd_layers,
+        accuracy_every=(
+            int(eval_cfg["accuracy_every"])
+            if eval_cfg.get("accuracy_every") is not None else None
+        ),
+        final_round=cfg.training.total_rounds - 1,
     )
 
     checkpoint_mgr = CheckpointManager(
@@ -374,7 +394,9 @@ def run(cfg: DictConfig) -> dict:
         coordinator = LocalOnlyCoordinator(**coordinator_kwargs)
     else:
         coordinator = DSGDCoordinator(
-            mixing_matrix=W, **coordinator_kwargs,
+            mixing_matrix=W,
+            mix_buffers=bool(cfg.training.get("mix_bn_buffers", False)),
+            **coordinator_kwargs,
         )
 
     history = coordinator.run()
@@ -388,18 +410,24 @@ def run(cfg: DictConfig) -> dict:
         trajectory = drift_tracker.get_trajectory(key)
         if trajectory.ndim == 1 and len(trajectory) > 0:
             final_drift_metrics[f"final_{key}"] = float(trajectory[-1])
-    # Alias the primary-layer CKA mean as the canonical analysis column.
-    cka_key = f"cka_{primary_layer}_mean"
-    if cka_key in drift_tracker._recorded_keys:
-        traj = drift_tracker.get_trajectory(cka_key)
-        if len(traj) > 0:
-            final_drift_metrics["final_cka_cross_community"] = float(traj[-1])
-    # Alias the primary-layer paired-MMD drift (B - W) likewise.
-    mmd_key = f"mmd_paired_{primary_layer}_drift"
-    if mmd_key in drift_tracker._recorded_keys:
-        traj = drift_tracker.get_trajectory(mmd_key)
-        if len(traj) > 0:
-            final_drift_metrics["final_mmd_paired_drift"] = float(traj[-1])
+    # Mean over the last `summary_window` evaluations: less noisy than the
+    # single final evaluation.
+    window = int((cfg.get("evaluation", {}) or {}).get("summary_window", 5))
+    for key in sorted(drift_tracker._recorded_keys):
+        trajectory = drift_tracker.get_trajectory(key)
+        if trajectory.ndim == 1 and len(trajectory) > 0:
+            final_drift_metrics[f"window_{key}"] = float(
+                np.mean(trajectory[-window:])
+            )
+    # Alias the primary-layer CKA mean and paired-MMD drift (B - W) as the
+    # canonical analysis columns.
+    for key, alias in (
+        (f"cka_{primary_layer}_mean", "cka_cross_community"),
+        (f"mmd_paired_{primary_layer}_drift", "mmd_paired_drift"),
+    ):
+        if f"final_{key}" in final_drift_metrics:
+            final_drift_metrics[f"final_{alias}"] = final_drift_metrics[f"final_{key}"]
+            final_drift_metrics[f"window_{alias}"] = final_drift_metrics[f"window_{key}"]
 
     summary = {
         "experiment_name": cfg.experiment_name,
@@ -409,6 +437,8 @@ def run(cfg: DictConfig) -> dict:
         "data_regime": cfg.data.partition_method,
         "dirichlet_alpha": cfg.data.dirichlet_alpha,
         "network_regime": cfg.graph.topology,
+        "mix_bn_buffers": bool(cfg.training.get("mix_bn_buffers", False)),
+        "primary_layer": primary_layer,
         "dataset": cfg.data.dataset,
         "model": cfg.model.architecture,
         "algorithm": algorithm,
@@ -416,6 +446,7 @@ def run(cfg: DictConfig) -> dict:
         "final_loss": history["mean_loss"][-1] if history["mean_loss"] else None,
         "wall_time": time.time() - t_start,
         **graph_metrics,
+        **partition_stats,
         **final_drift_metrics,
     }
     save_json(summary, output_dir / "summary.json")

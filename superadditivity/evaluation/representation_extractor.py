@@ -11,7 +11,7 @@ All extracted representations are returned in float64.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Sequence
 
 import numpy as np
 import torch

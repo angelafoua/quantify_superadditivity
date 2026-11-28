@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -35,7 +34,7 @@ class TestRepresentationExtractor:
         labels = torch.zeros(10, dtype=torch.long)
         probe_loader = DataLoader(TensorDataset(data, labels), batch_size=5)
         features = extractor._extract_single(small_model, probe_loader)
-        for name, feat in features.items():
+        for _name, feat in features.items():
             assert feat.dtype == np.float64
 
     def test_feature_batch_dimension(self, small_model, device):
@@ -45,7 +44,7 @@ class TestRepresentationExtractor:
         labels = torch.zeros(n, dtype=torch.long)
         probe_loader = DataLoader(TensorDataset(data, labels), batch_size=5)
         features = extractor._extract_single(small_model, probe_loader)
-        for name, feat in features.items():
+        for _name, feat in features.items():
             assert feat.shape[0] == n
 
     def test_extract_from_clients(self, small_model, device):

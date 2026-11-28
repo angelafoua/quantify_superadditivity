@@ -16,6 +16,12 @@ graph_seed: 100
 
 # Drift-metric settings (consumed in scripts/run_experiment.py)
 evaluation:
+  # Test accuracy of every client's own model, every N rounds and at the
+  # final round (rounded to evaluation rounds). null disables it.
+  accuracy_every: 50
+  # Summaries also record window_<metric>: the mean over the last N
+  # evaluations (analyse with --metric cka_window / mmd_window).
+  summary_window: 5
   # Client-level paired MMD: the MMD protocol used for reported results.
   # See superadditivity/evaluation/paired_mmd_analyzer.py for the definition.
   paired_mmd:
@@ -24,7 +30,10 @@ evaluation:
     # Multiples of the per-evaluation median-heuristic bandwidth. 1.0 is
     # the primary bandwidth and is required; the rest are for sensitivity.
     bandwidth_multipliers: [0.25, 0.5, 1.0, 2.0, 4.0]
-    bandwidth_subsample: 2000    # pooled points used for the median heuristic
+    # within_client: median distance between images within each client (not
+    # inflated by drift between clients); pooled: over all clients pooled.
+    bandwidth_reference: within_client
+    bandwidth_subsample: 2000    # points used for the median heuristic
     bandwidth_seed: 0            # fixed across runs; do not tie to run_seed
     n_permutations: 10000        # descriptive B - W test; 0 disables
     permutation_seed: 0

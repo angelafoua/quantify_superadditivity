@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -16,10 +16,13 @@ def fit_mixed_effects(
     factor_a: str = "data_regime",
     factor_b: str = "network_regime",
     random_effect: str = "run_seed",
+    crossed_effect: Optional[str] = "graph_seed",
 ) -> Dict[str, Any]:
-    """Fit a mixed-effects model with crossed fixed effects and random intercept.
+    """Fit a mixed-effects model for the factorial with seed random effects.
 
-    Model: ``metric ~ data_regime * network_regime``, random intercept on ``run_seed``.
+    Model: ``metric ~ data_regime * network_regime`` with a random
+    intercept for ``run_seed`` and, when ``crossed_effect`` has more than
+    one level, a crossed random intercept for it (``graph_seed``).
 
     Parameters
     ----------
@@ -31,6 +34,8 @@ def fit_mixed_effects(
         Fixed-effect factor columns.
     random_effect:
         Column for the random intercept.
+    crossed_effect:
+        Optional second, crossed random intercept (``None`` to disable).
 
     Returns
     -------
@@ -44,9 +49,26 @@ def fit_mixed_effects(
     formula = f"{dv} ~ C({factor_a}) * C({factor_b})"
 
     try:
-        model = smf.mixedlm(
-            formula, data=df, groups=df[random_effect],
+        crossed = (
+            crossed_effect is not None
+            and crossed_effect in df.columns
+            and df[crossed_effect].nunique() > 1
         )
+        if crossed:
+            # Crossed random intercepts for both seeds: one group, two
+            # variance components (statsmodels' idiom for crossed effects).
+            data = df.assign(_one=1)
+            model = smf.mixedlm(
+                formula, data=data, groups=data["_one"],
+                vc_formula={
+                    random_effect: f"0 + C({random_effect})",
+                    crossed_effect: f"0 + C({crossed_effect})",
+                },
+            )
+        else:
+            model = smf.mixedlm(
+                formula, data=df, groups=df[random_effect],
+            )
         result = model.fit(reml=True)
 
         params = {}

@@ -96,7 +96,7 @@ in [`superadditivity/datasets/dataset_loader.py`](../superadditivity/datasets/da
 | File | Partition method | Description |
 |------|-----------------|-------------|
 | [`configs/data/iid.yaml`](../configs/data/iid.yaml) | `iid` | Uniform random assignment |
-| [`configs/data/mild_noniid.yaml`](../configs/data/mild_noniid.yaml) | `dirichlet` | Dirichlet α=1.0 label skew |
+| [`configs/data/mild_noniid.yaml`](../configs/data/mild_noniid.yaml) | `dirichlet` | Dirichlet α=10 label skew |
 | [`configs/data/moderate_noniid.yaml`](../configs/data/moderate_noniid.yaml) | `dirichlet` | Dirichlet α=0.5 label skew |
 | [`configs/data/severe_noniid.yaml`](../configs/data/severe_noniid.yaml) | `dirichlet` | Dirichlet α=0.1 label skew |
 | [`configs/data/quantity_skew.yaml`](../configs/data/quantity_skew.yaml) | `quantity_skew` | IID labels, skewed sample counts (negative control) |
@@ -186,7 +186,7 @@ The `run()` function executes these steps in order:
    - [`superadditivity/graphs/graph_metrics.py`](../superadditivity/graphs/graph_metrics.py) — spectral gap, conductance, etc.
 
 4. **Partition data** — assigns training samples to the `n_clients` clients (16 by default):
-   - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew within semantic clusters (IID or non-IID modes)
+   - [`superadditivity/datasets/semantic_partitioner.py`](../superadditivity/datasets/semantic_partitioner.py) — Dirichlet label skew (IID or non-IID modes). With `between_community: dirichlet` (default), each class's samples are split across communities by a sorted `Dir(α)` draw whose largest shares go to the class's home community (its semantic cluster), then across the community's clients by `Dir(α)`. α therefore controls how different the communities' label mixes are, and each sample goes to exactly one client. The run summary records `community_label_tv`, the mean total-variation distance between community label distributions. `between_community: disjoint` reproduces the legacy split, where α acts only inside communities.
    - [`superadditivity/datasets/quantity_skew_partitioner.py`](../superadditivity/datasets/quantity_skew_partitioner.py) — IID labels with skewed sample counts
    - [`superadditivity/datasets/client_dataset.py`](../superadditivity/datasets/client_dataset.py) — wraps indices into per-client `Dataset` objects
 
@@ -292,7 +292,7 @@ The primary experiment tests superadditivity in a 2×2 design:
 **File:** [`scripts/run_analysis.py`](../scripts/run_analysis.py)
 
 ```bash
-# Factorial analysis (2×2 ANOVA + bootstrap interaction test)
+# Factorial analysis (2×2 ANOVA + seed-paired interaction test)
 python scripts/run_analysis.py --results_dir outputs/core_factorial
 
 # Interaction surface fit (for p_out sweep data)
@@ -308,6 +308,16 @@ python scripts/run_analysis.py --results_dir outputs/core_factorial --metric mmd
 python scripts/run_analysis.py --results_dir outputs/core_factorial \
     --metric final_mmd_paired_layer4_drift_bw0p5 --orientation distance
 ```
+
+**Statistics.**
+- *Primary I > 0 test:* runs that share `run_seed` share initial weights and the data partition in all four cells, so they're paired. Each seed's I is computed (averaging over graph seeds), then a one-sided t-test is run across seeds. An independent-cells bootstrap is reported as secondary.
+- *Interaction F:* tested with Freedman–Lane permutation (residuals of the main-effects model), which stays valid when main effects are present.
+- *Resampling p-values:* computed as (count + 1) / (B + 1) and reported as "< 1/B" at the floor.
+- *p_out surface:* IID runs are the reference level (α = ∞). Points on the reference row or column (I = 0 by construction) are excluded from the fit.
+
+**Scale robustness.** `--transform log|logit` applies a monotone transform to drift before the analysis (e.g. `--metric cka --transform logit`). An interaction can appear or vanish under such rescaling, so report the conclusion on more than one scale. Outputs go to `analysis_<metric>_<transform>/`.
+
+**Window metrics.** `--metric cka_window` / `mmd_window` analyse the mean over the last `evaluation.summary_window` evaluations instead of the final one.
 
 **Drift orientation.** Every analysis runs on *drift* (higher = more drift),
 so that I = Drift(D) − Drift(B) − Drift(C) + Drift(A) > 0 means superadditive
@@ -326,11 +336,11 @@ is a distance and is used as is. Metrics are defined in
 |------|---------|
 | [`aggregator.py`](../superadditivity/analysis/aggregator.py) | Load and aggregate `summary.json` files into a DataFrame |
 | [`drift_metrics.py`](../superadditivity/analysis/drift_metrics.py) | Metrics selectable with `--metric`, drift orientation, factorial cell assignment |
-| [`anova.py`](../superadditivity/analysis/anova.py) | Two-way ANOVA and permutation ANOVA (10,000 permutations) |
-| [`interaction_analyzer.py`](../superadditivity/analysis/interaction_analyzer.py) | Bootstrap I>0 test (10,000 resamples), p_out sweep aggregation, surface fitting |
+| [`anova.py`](../superadditivity/analysis/anova.py) | Two-way ANOVA and Freedman–Lane permutation test of the interaction F (10,000 permutations) |
+| [`interaction_analyzer.py`](../superadditivity/analysis/interaction_analyzer.py) | Seed-paired I > 0 test (primary), independent-cells bootstrap (secondary), p_out sweep I per point with CI, surface fitting |
 | [`effect_sizes.py`](../superadditivity/analysis/effect_sizes.py) | Bootstrap confidence intervals |
 | [`multiple_comparisons.py`](../superadditivity/analysis/multiple_comparisons.py) | Pairwise t-tests with correction |
-| [`mixed_effects.py`](../superadditivity/analysis/mixed_effects.py) | Linear mixed-effects model |
+| [`mixed_effects.py`](../superadditivity/analysis/mixed_effects.py) | Linear mixed-effects model, crossed random intercepts for `run_seed` and `graph_seed` |
 | [`statistical_report.py`](../superadditivity/analysis/statistical_report.py) | Generates a Markdown report |
 
 **Outputs** (written to `outputs/<experiment_name>/analysis/` for CKA, `analysis_<metric>/` otherwise):
@@ -338,7 +348,7 @@ is a distance and is used as is. Metrics are defined in
 | File | Contents |
 |------|----------|
 | `statistical_report.md` | Full analysis report |
-| `interaction_test.json` | Bootstrap I estimate, CI, p-value, metric and orientation used, per-cell run counts and means |
+| `interaction_test.json` | I with t CI and one-sided p from the seed-paired test, per-seed I values, bootstrap CI over seeds, the independent-cells bootstrap as secondary, metric/orientation/transform used, per-cell run counts and means |
 | `interaction_surface.json` | α/β grid values and surface fit parameters |
 | `surface_report.md` | Surface fit summary |
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import numpy as np
 from scipy import stats
@@ -104,7 +104,7 @@ def pairwise_ttests(
             raw_ps.append(p_val)
 
     corrected = correct_pvalues(np.array(raw_ps), method=correction)
-    for pair, p_corr in zip(pairs, corrected):
+    for pair, p_corr in zip(pairs, corrected, strict=False):
         pair["p_corrected"] = float(p_corr)
 
     return pairs

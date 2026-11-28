@@ -304,3 +304,88 @@ class TestEvaluatorIntegration:
                 community_map={}, paired_mmd=PairedMMDAnalyzer(),
                 paired_mmd_layers=["layer9"],
             )
+
+
+class TestClientAccuracy:
+    def _evaluator(self, accuracy_every, final_round=None):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        from superadditivity.evaluation import (
+            CentroidAnalyzer, CKAAnalyzer, DriftTracker, ExperimentEvaluator,
+            FisherAnalyzer, RepresentationExtractor, RSAAnalyzer,
+        )
+
+        torch.manual_seed(0)
+        x = torch.randn(40, 3, 8, 8)
+        y = torch.randint(0, 4, (40,))
+        loader = DataLoader(TensorDataset(x, y), batch_size=16)
+        tracker = DriftTracker()
+        ev = ExperimentEvaluator(
+            extractor=RepresentationExtractor(["2"], device="cpu"),
+            cka=CKAAnalyzer(), rsa=RSAAnalyzer(), mmd=None,
+            fisher=FisherAnalyzer(), centroid=CentroidAnalyzer(),
+            drift_tracker=tracker, probe_loader=loader,
+            community_map={0: 0, 1: 0, 2: 1, 3: 1}, test_loader=loader,
+            primary_layer="2", accuracy_every=accuracy_every, final_round=final_round,
+        )
+        return ev, tracker, x, y
+
+    @staticmethod
+    def _clients():
+        def make():
+            return torch.nn.Sequential(
+                torch.nn.Conv2d(3, 6, 3, padding=1), torch.nn.ReLU(),
+                torch.nn.AdaptiveAvgPool2d(1), torch.nn.Flatten(), torch.nn.Linear(6, 4),
+            )
+        return {cid: SimpleNamespace(model=make()) for cid in range(4)}
+
+    def test_accuracy_matches_direct_computation(self):
+        ev, _, x, y = self._evaluator(accuracy_every=1)
+        clients = self._clients()
+        out = ev.evaluate_client_accuracy(clients)
+        expected = [
+            float((clients[c].model.eval()(x).argmax(1) == y).float().mean()) for c in range(4)
+        ]
+        np.testing.assert_allclose(out["accuracy_clients"], expected)
+        assert out["accuracy_client_mean"] == pytest.approx(np.mean(expected))
+
+    def test_schedule(self):
+        ev, tracker, _, _ = self._evaluator(accuracy_every=20, final_round=25)
+        clients = self._clients()
+        for r in (0, 10, 20, 25):
+            scalars = ev.evaluate(clients, r)
+            assert ("accuracy_client_mean" in scalars) == (r in (0, 20, 25))
+        np.testing.assert_array_equal(tracker.get_rounds("accuracy_client_mean"), [0, 20, 25])
+
+    def test_disabled_by_default(self):
+        ev, _, _, _ = self._evaluator(accuracy_every=None)
+        assert "accuracy_client_mean" not in ev.evaluate(self._clients(), 0)
+
+
+class TestBandwidthReference:
+    def test_within_client_bandwidth_ignores_between_client_offsets(self):
+        """Shifting one community far away must not change the kernel width."""
+        rng = np.random.RandomState(12)
+        emb, comm = _clients(rng, n=40, d=3)
+        shifted = {k: v + (100.0 if comm[k] == 1 else 0.0) for k, v in emb.items()}
+        within = PairedMMDAnalyzer(n_permutations=0)
+        pooled = PairedMMDAnalyzer(n_permutations=0, bandwidth_reference="pooled")
+        assert within.compute(shifted, comm)["bandwidth"] == pytest.approx(
+            within.compute(emb, comm)["bandwidth"]
+        )
+        assert pooled.compute(shifted, comm)["bandwidth"] > 10 * pooled.compute(emb, comm)["bandwidth"]
+
+    def test_within_client_matches_direct_median(self):
+        from scipy.spatial.distance import pdist
+
+        rng = np.random.RandomState(13)
+        X = rng.randn(3, 20, 4)
+        from superadditivity.evaluation.paired_mmd_analyzer import within_client_median_bandwidth
+
+        got = within_client_median_bandwidth(torch.as_tensor(X), subsample=10_000, seed=0)
+        expected = np.median(np.concatenate([pdist(X[c]) for c in range(3)]))
+        assert got == pytest.approx(expected, rel=1e-12)
+
+    def test_invalid_reference(self):
+        with pytest.raises(ValueError):
+            PairedMMDAnalyzer(bandwidth_reference="global")

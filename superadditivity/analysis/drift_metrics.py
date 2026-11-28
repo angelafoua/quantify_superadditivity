@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Iterable, Optional
 
 import numpy as np
@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 SIMILARITY = "similarity"
 DISTANCE = "distance"
 ORIENTATIONS = (SIMILARITY, DISTANCE)
+
+#: Monotone transforms applied to drift before analysis. An interaction
+#: measured on a bounded or non-linear scale can appear or vanish under a
+#: monotone rescaling, so a superadditivity claim should hold on more than
+#: one scale (e.g. ``none`` and ``logit`` for 1 - CKA).
+TRANSFORMS = ("none", "log", "logit")
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,10 @@ class DriftMetric:
         Per-round key in ``drift_metrics.h5`` (``metrics/<key>/values``),
         with ``{layer}`` as a placeholder for the layer name. ``None`` if
         the metric has no per-round trajectory.
+    transform:
+        Monotone transform applied after orientation: ``"none"``,
+        ``"log"`` (drift must be > 0) or ``"logit"`` (drift must be in
+        (0, 1), e.g. 1 - CKA).
     """
 
     name: str
@@ -59,12 +69,22 @@ class DriftMetric:
     orientation: str
     description: str
     trajectory_key: Optional[str] = None
+    transform: str = "none"
 
     def __post_init__(self) -> None:
         if self.orientation not in ORIENTATIONS:
             raise ValueError(
                 f"orientation must be one of {ORIENTATIONS}, got {self.orientation!r}"
             )
+        if self.transform not in TRANSFORMS:
+            raise ValueError(
+                f"transform must be one of {TRANSFORMS}, got {self.transform!r}"
+            )
+
+    @property
+    def key(self) -> str:
+        """Identifier including the transform, used for output folders."""
+        return self.name if self.transform == "none" else f"{self.name}_{self.transform}"
 
     def to_drift(self, values: Iterable[float]) -> np.ndarray:
         """Convert raw metric values to drift orientation (higher = more drift).
@@ -81,7 +101,25 @@ class DriftMetric:
         """
         arr = np.asarray(list(values) if not hasattr(values, "__len__") else values,
                          dtype=np.float64)
-        return 1.0 - arr if self.orientation == SIMILARITY else arr
+        drift = 1.0 - arr if self.orientation == SIMILARITY else arr
+        if self.transform == "none":
+            return drift
+        if self.transform == "log":
+            bad = ~(drift > 0)
+            if bad.any():
+                raise ValueError(
+                    f"log transform needs drift > 0; {int(bad.sum())} value(s) of "
+                    f"{self.column} give drift <= 0 (min {np.nanmin(drift):.3g})"
+                )
+            return np.log(drift)
+        bad = ~((drift > 0) & (drift < 1))
+        if bad.any():
+            raise ValueError(
+                f"logit transform needs 0 < drift < 1; {int(bad.sum())} value(s) "
+                f"of {self.column} are outside (range {np.nanmin(drift):.3g} to "
+                f"{np.nanmax(drift):.3g})"
+            )
+        return np.log(drift) - np.log1p(-drift)
 
     def h5_key(self, layer: str) -> Optional[str]:
         """Per-round HDF5 metric key for ``layer`` (``None`` if unavailable)."""
@@ -92,16 +130,21 @@ class DriftMetric:
     @property
     def label(self) -> str:
         """Axis label for plots, e.g. ``"Drift (1 - CKA)"``."""
-        if self.orientation == SIMILARITY:
-            return f"Drift (1 - {self.name.upper() if self.name in DRIFT_METRICS else self.name})"
-        return f"Drift ({self.name.upper() if self.name in DRIFT_METRICS else self.name})"
+        shown = self.name.upper() if self.name in DRIFT_METRICS else self.name
+        inner = f"1 - {shown}" if self.orientation == SIMILARITY else shown
+        if self.transform == "none":
+            return f"Drift ({inner})"
+        return f"{self.transform}(Drift ({inner}))"
 
     @property
     def drift_definition(self) -> str:
         """Formula relating drift to the raw column, for reports."""
-        if self.orientation == SIMILARITY:
-            return f"Drift = 1 - {self.column}"
-        return f"Drift = {self.column}"
+        inner = (
+            f"1 - {self.column}" if self.orientation == SIMILARITY else self.column
+        )
+        if self.transform == "none":
+            return f"Drift = {inner}"
+        return f"Drift = {self.transform}({inner})"
 
 
 #: Named metrics. ``cka`` is the paper's primary metric.
@@ -128,12 +171,34 @@ DRIFT_METRICS: Dict[str, DriftMetric] = {
     ),
 }
 
+DRIFT_METRICS["cka_window"] = DriftMetric(
+    name="cka_window",
+    column="window_cka_cross_community",
+    orientation=SIMILARITY,
+    description=(
+        "Primary-layer linear CKA between community-averaged embeddings, mean "
+        "over the last evaluation.summary_window evaluations"
+    ),
+    trajectory_key="cka_{layer}_mean",
+)
+DRIFT_METRICS["mmd_window"] = DriftMetric(
+    name="mmd_window",
+    column="window_mmd_paired_drift",
+    orientation=DISTANCE,
+    description=(
+        "Primary-layer client-level paired MMD^2 (B - W), mean over the last "
+        "evaluation.summary_window evaluations"
+    ),
+    trajectory_key="mmd_paired_{layer}_drift",
+)
+
 DEFAULT_METRIC = "cka"
 
 
 def resolve_drift_metric(
     metric: str = DEFAULT_METRIC,
     orientation: Optional[str] = None,
+    transform: str = "none",
 ) -> DriftMetric:
     """Look up a named metric, or build one for a raw summary column.
 
@@ -146,6 +211,8 @@ def resolve_drift_metric(
         Required for a raw column: ``"similarity"`` or ``"distance"``. For
         a named metric it must be omitted or match the metric's
         orientation.
+    transform:
+        One of :data:`TRANSFORMS`, applied after orientation.
 
     Returns
     -------
@@ -164,7 +231,7 @@ def resolve_drift_metric(
                 f"Metric {metric!r} is a {known.orientation}; "
                 f"--orientation {orientation} contradicts it"
             )
-        return known
+        return replace(known, transform=transform)
     if orientation is None:
         raise ValueError(
             f"{metric!r} is not a named metric ({sorted(DRIFT_METRICS)}). For a "
@@ -179,6 +246,7 @@ def resolve_drift_metric(
         description=f"Summary column {metric} ({orientation})",
         # A final_<key> summary column is the last value of metrics/<key>.
         trajectory_key=metric[len("final_"):] if metric.startswith("final_") else None,
+        transform=transform,
     )
 
 
@@ -197,9 +265,9 @@ def output_subdir(metric: DriftMetric, base: str) -> str:
     str
         Folder name (no path).
     """
-    if metric.name == DEFAULT_METRIC:
+    if metric.key == DEFAULT_METRIC:
         return base
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", metric.name)
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", metric.key)
     return f"{base}_{safe}"
 
 

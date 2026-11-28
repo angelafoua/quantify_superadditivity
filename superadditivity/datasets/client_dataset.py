@@ -6,7 +6,6 @@ import logging
 from typing import Optional
 
 import numpy as np
-import torch
 from torch.utils.data import Dataset
 
 from superadditivity.utils.seed import derived_seed

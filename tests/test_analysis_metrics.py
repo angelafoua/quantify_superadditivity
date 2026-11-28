@@ -185,3 +185,31 @@ class TestRunAnalysis:
         assert _summaries_fingerprint(
             str(tmp_path), resolve_drift_metric("cka")
         ) != _summaries_fingerprint(str(tmp_path), resolve_drift_metric("mmd"))
+
+
+class TestTransforms:
+    def test_logit_of_cka_divergence(self):
+        m = resolve_drift_metric("cka", transform="logit")
+        np.testing.assert_allclose(m.to_drift([0.75]), [np.log(0.25 / 0.75)])
+        assert m.key == "cka_logit"
+        assert m.drift_definition == "Drift = logit(1 - final_cka_cross_community)"
+
+    def test_log_rejects_non_positive_drift(self):
+        m = resolve_drift_metric("mmd", transform="log")
+        np.testing.assert_allclose(m.to_drift([np.e]), [1.0])
+        with pytest.raises(ValueError, match="drift <= 0"):
+            m.to_drift([0.01, -0.001])
+
+    def test_logit_rejects_out_of_range(self):
+        with pytest.raises(ValueError, match="0 < drift < 1"):
+            resolve_drift_metric("cka", transform="logit").to_drift([1.0])
+
+    def test_invalid_transform(self):
+        with pytest.raises(ValueError):
+            resolve_drift_metric("cka", transform="sqrt")
+
+    def test_transform_gets_its_own_output_folder(self):
+        from superadditivity.analysis.drift_metrics import output_subdir
+
+        assert output_subdir(resolve_drift_metric("cka"), "analysis") == "analysis"
+        assert output_subdir(resolve_drift_metric("cka", transform="logit"), "analysis") == "analysis_cka_logit"

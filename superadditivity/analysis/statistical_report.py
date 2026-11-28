@@ -52,20 +52,58 @@ class StatisticalReport:
 
         self.add_section("Two-Way ANOVA", "\n".join(lines))
 
-    def add_interaction_results(self, interaction_result: Dict[str, Any]) -> None:
-        """Format interaction-term analysis."""
-        lines = [
-            f"- **I (observed):** {interaction_result['I_observed']:.4f}",
-            f"- **95% CI:** [{interaction_result['I_ci_lower']:.4f}, {interaction_result['I_ci_upper']:.4f}]",
-            f"- **Bootstrap p-value (H0: I <= 0):** {interaction_result['p_value']:.4g}",
-            f"- **N bootstrap:** {interaction_result['n_bootstrap']}",
-        ]
+    @staticmethod
+    def format_p(p: float, n_resamples: Optional[int] = None) -> str:
+        """Format a p-value; a resampling p at its floor is shown as a bound."""
+        if p != p:  # nan
+            return "n/a"
+        if n_resamples and p <= 1.0 / (n_resamples + 1) + 1e-15:
+            return f"< {1.0 / n_resamples:.1g}"
+        return f"{p:.4g}"
 
-        if interaction_result["p_value"] < 0.05:
+    def add_interaction_results(self, interaction_result: Dict[str, Any]) -> None:
+        """Format the interaction-term test.
+
+        Uses ``method`` (if present) to describe the test. A nested
+        ``independent_bootstrap`` result, if present, is reported as a
+        secondary analysis that ignores the pairing of runs by seed.
+        """
+        r = interaction_result
+        method = r.get("method", "bootstrap, cells resampled independently")
+        lines = [
+            f"- **Method:** {method}",
+            f"- **I (observed):** {r['I_observed']:.4g}",
+            f"- **95% CI:** [{r['I_ci_lower']:.4g}, {r['I_ci_upper']:.4g}]",
+            f"- **p-value (H0: I <= 0):** "
+            f"{self.format_p(r['p_value'], None if 'n_units' in r else r.get('n_bootstrap'))}",
+        ]
+        if "n_units" in r:
+            lines.append(f"- **Units (seeds) in all cells:** {r['n_units']}")
+            if r.get("bootstrap_ci_lower") == r.get("bootstrap_ci_lower"):
+                lines.append(
+                    f"- **Bootstrap 95% CI over units:** "
+                    f"[{r['bootstrap_ci_lower']:.4g}, {r['bootstrap_ci_upper']:.4g}]"
+                )
+        else:
+            lines.append(f"- **N bootstrap:** {r['n_bootstrap']}")
+
+        p = r["p_value"]
+        if p != p:
+            lines.append("\n**Conclusion:** Not testable (fewer than 2 seeds in every cell).")
+        elif p < 0.05:
             lines.append("\n**Conclusion:** Significant superadditive interaction detected (I > 0).")
         else:
             lines.append("\n**Conclusion:** No significant superadditive interaction detected.")
 
+        ind = r.get("independent_bootstrap")
+        if ind:
+            lines += [
+                "",
+                "*Secondary (treats runs as independent, ignoring shared seeds):* "
+                f"I = {ind['I_observed']:.4g}, 95% CI [{ind['I_ci_lower']:.4g}, "
+                f"{ind['I_ci_upper']:.4g}], p = "
+                f"{self.format_p(ind['p_value'], ind.get('n_bootstrap'))}",
+            ]
         self.add_section("Superadditive Interaction Test", "\n".join(lines))
 
     def add_surface_fit_results(self, surface_result: Dict[str, Any]) -> None:

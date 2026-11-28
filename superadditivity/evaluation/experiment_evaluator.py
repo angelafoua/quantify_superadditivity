@@ -75,6 +75,12 @@ class ExperimentEvaluator:
     paired_mmd_layers:
         Layers on which paired MMD is computed. ``None`` means every layer
         of the extractor.
+    accuracy_every:
+        If set (and ``test_loader`` is given), each client's own model is
+        evaluated on the test set at rounds divisible by this, and at
+        ``final_round``. ``None`` disables accuracy evaluation.
+    final_round:
+        Last training round (always evaluated for accuracy when enabled).
 
     Examples
     --------
@@ -103,6 +109,8 @@ class ExperimentEvaluator:
         device: str = "cpu",
         paired_mmd: Optional[PairedMMDAnalyzer] = None,
         paired_mmd_layers: Optional[Sequence[str]] = None,
+        accuracy_every: Optional[int] = None,
+        final_round: Optional[int] = None,
     ) -> None:
         self.extractor = extractor
         self.cka = cka
@@ -120,10 +128,16 @@ class ExperimentEvaluator:
         )
         self.device = torch.device(device)
         self.paired_mmd = paired_mmd
+        if accuracy_every is not None and accuracy_every <= 0:
+            raise ValueError(f"accuracy_every must be positive, got {accuracy_every}")
+        self.accuracy_every = accuracy_every
+        self.final_round = final_round
         if paired_mmd_layers is None:
             self.paired_mmd_layers = list(extractor.layer_names)
         else:
-            unknown = [l for l in paired_mmd_layers if l not in extractor.layer_names]
+            unknown = [
+                name for name in paired_mmd_layers if name not in extractor.layer_names
+            ]
             if unknown:
                 raise ValueError(
                     f"paired_mmd_layers {unknown} are not extracted layers "
@@ -212,10 +226,14 @@ class ExperimentEvaluator:
         if self.paired_mmd is not None:
             metrics.update(self._paired_mmd_metrics(client_emb, clients))
 
-        # Step 5: Record to drift tracker
+        # Step 5: Client test accuracy (each client's own model)
+        if self._accuracy_due(round_num):
+            metrics.update(self.evaluate_client_accuracy(clients))
+
+        # Step 6: Record to drift tracker
         self.drift_tracker.record(round_num, metrics)
 
-        # Step 6: Optionally store raw embeddings
+        # Step 7: Optionally store raw embeddings
         if round_num in self.embedding_snapshot_rounds:
             self.drift_tracker.record_embeddings(round_num, community_emb)
 
@@ -287,6 +305,59 @@ class ExperimentEvaluator:
                 out[f"{prefix}_between_{tag}"] = agg["between"]
                 out[f"{prefix}_within_{tag}"] = agg["within"]
         return out
+
+    def _accuracy_due(self, round_num: int) -> bool:
+        if self.accuracy_every is None or self.test_loader is None:
+            return False
+        return round_num % self.accuracy_every == 0 or round_num == self.final_round
+
+    def evaluate_client_accuracy(self, clients: Dict[int, Any]) -> Dict[str, Any]:
+        """Test accuracy of every client's own model (with its own BN stats).
+
+        Parameters
+        ----------
+        clients:
+            Mapping from client ID to client object with a ``.model``.
+
+        Returns
+        -------
+        Dict[str, Any]
+            ``accuracy_client_mean`` / ``_std`` / ``_min`` / ``_max``
+            (scalars) and ``accuracy_clients`` (array ordered by client ID).
+
+        Raises
+        ------
+        RuntimeError
+            If ``test_loader`` was not provided.
+        """
+        if self.test_loader is None:
+            raise RuntimeError("Cannot evaluate accuracy: test_loader was not provided")
+        accs = []
+        for cid in sorted(clients):
+            model = clients[cid].model
+            was_training = model.training
+            model.eval()
+            correct = total = 0
+            with torch.no_grad():
+                for batch in self.test_loader:
+                    images = batch[0].to(self.device)
+                    labels = batch[1].to(self.device)
+                    correct += int((model(images).argmax(dim=1) == labels).sum().item())
+                    total += int(labels.numel())
+            model.train(was_training)
+            accs.append(correct / total if total else float("nan"))
+        arr = np.asarray(accs, dtype=np.float64)
+        logger.info(
+            "Client test accuracy: mean=%.4f min=%.4f max=%.4f",
+            arr.mean(), arr.min(), arr.max(),
+        )
+        return {
+            "accuracy_client_mean": float(arr.mean()),
+            "accuracy_client_std": float(arr.std(ddof=1)) if len(arr) > 1 else 0.0,
+            "accuracy_client_min": float(arr.min()),
+            "accuracy_client_max": float(arr.max()),
+            "accuracy_clients": arr,
+        }
 
     def evaluate_accuracy(
         self,

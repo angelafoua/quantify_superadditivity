@@ -75,7 +75,8 @@ class TestSemanticPartitioner:
         all_indices = []
         for indices in result.values():
             all_indices.extend(indices)
-        assert len(all_indices) >= 200 * 0.9
+        # Every sample exactly once (no duplication across communities).
+        assert sorted(all_indices) == list(range(200))
 
     def test_n_clients_correct(self):
         n_clients = 8
@@ -108,6 +109,75 @@ class TestSemanticPartitioner:
                 run_seed=42,
                 num_clients=n_clients,
             )
+
+
+class TestBetweenCommunityDirichlet:
+    """alpha must control how different the communities' label mixes are."""
+
+    CLUSTERS = {0: [0, 1, 2], 1: [3, 4, 5], 2: [6, 7, 8], 3: [9, 10, 11]}
+
+    def _partitioner(self, alpha, between="dirichlet", clusters=CLUSTERS, n_classes=12):
+        targets = np.repeat(np.arange(n_classes), 400)
+        ds = _SyntheticDataset(len(targets), n_classes)
+        ds.targets = list(targets)
+        comm = {c: list(range(4 * c, 4 * c + 4)) for c in range(4)}
+        return SemanticPartitioner(
+            ds, clusters, comm, alpha, "dirichlet_semantic", 42, 16,
+            between_community=between,
+        )
+
+    @pytest.mark.parametrize("alpha", [100.0, 1.0, 0.1])
+    def test_each_sample_assigned_exactly_once(self, alpha):
+        p = self._partitioner(alpha)
+        result = p.partition()
+        all_idx = sorted(i for v in result.values() for i in v)
+        assert all_idx == list(range(len(p.targets)))
+
+    def test_label_distance_decreases_with_alpha(self):
+        tv = [
+            self._partitioner(a).community_label_distance(self._partitioner(a).partition())
+            for a in (0.05, 0.5, 10.0, 1000.0)
+        ]
+        assert tv == sorted(tv, reverse=True)
+        assert tv[0] > 0.8 and tv[-1] < 0.05
+
+    def test_home_community_gets_largest_share(self):
+        p = self._partitioner(0.5)
+        result = p.partition()
+        for comm, classes in self.CLUSTERS.items():
+            for cls in classes:
+                per_comm = [
+                    sum(int(p.targets[i] == cls)
+                        for cid in range(4 * c, 4 * c + 4) for i in result[cid])
+                    for c in range(4)
+                ]
+                assert int(np.argmax(per_comm)) == comm
+
+    def test_legacy_disjoint_is_constant_in_alpha(self):
+        tv = [
+            self._partitioner(a, "disjoint").community_label_distance(
+                self._partitioner(a, "disjoint").partition()
+            )
+            for a in (0.1, 10.0)
+        ]
+        # ~1.0 (an empty client may borrow one sample from another community)
+        assert tv[0] == pytest.approx(1.0, abs=1e-3) and tv[1] == pytest.approx(1.0, abs=1e-3)
+
+    def test_shared_pools_do_not_duplicate(self):
+        """3 clusters for 4 communities (PathMNIST-like) must not duplicate data."""
+        clusters = {0: [0, 1, 2], 1: [3, 4, 5], 2: [6, 7, 8]}
+        p = self._partitioner(0.5, clusters=clusters, n_classes=9)
+        result = p.partition()
+        all_idx = [i for v in result.values() for i in v]
+        assert len(all_idx) == len(set(all_idx)) == len(p.targets)
+
+    def test_split_counts_sum_and_rounding(self):
+        counts = SemanticPartitioner._split_counts(10, np.array([0.34, 0.33, 0.33]))
+        assert counts.sum() == 10 and list(counts) == [4, 3, 3]
+
+    def test_invalid_between_mode(self):
+        with pytest.raises(ValueError, match="between_community"):
+            self._partitioner(1.0, between="bogus")
 
 
 class TestQuantitySkewPartitioner:
