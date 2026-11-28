@@ -7,10 +7,48 @@ from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
+from superadditivity.analysis.drift_metrics import (
+    CELL_LABELS,
+    DriftMetric,
+    resolve_drift_metric,
+)
 from superadditivity.visualization.figure_style import WONG_COLORS, set_publication_style
 
 logger = logging.getLogger(__name__)
+
+
+def factorial_cell_stats(
+    table: pd.DataFrame,
+) -> Tuple[Dict[str, float], Dict[str, Tuple[float, float]], Dict[str, int]]:
+    """Per-cell mean drift and 95% normal-approximation CI.
+
+    Parameters
+    ----------
+    table:
+        Output of :meth:`ResultAggregator.build_factorial_table`, with
+        columns ``cell`` (A-D) and ``metric`` (drift orientation).
+
+    Returns
+    -------
+    tuple
+        ``(means, cis, counts)`` keyed by cell. CI = mean +/- 1.96 * SEM.
+        A cell with a single run gets a zero-width CI.
+    """
+    means: Dict[str, float] = {}
+    cis: Dict[str, Tuple[float, float]] = {}
+    counts: Dict[str, int] = {}
+    for cell in "ABCD":
+        vals = table.loc[table["cell"] == cell, "metric"].to_numpy(dtype=np.float64)
+        if len(vals) == 0:
+            continue
+        m = float(vals.mean())
+        sem = float(vals.std(ddof=1) / np.sqrt(len(vals))) if len(vals) > 1 else 0.0
+        means[cell] = m
+        cis[cell] = (m - 1.96 * sem, m + 1.96 * sem)
+        counts[cell] = int(len(vals))
+    return means, cis, counts
 
 
 def plot_interaction_bar(
@@ -19,8 +57,18 @@ def plot_interaction_bar(
     interaction_I: Optional[float] = None,
     title: str = "2x2 Factorial: Superadditive Interaction",
     save_path: Optional[str] = None,
+    ylabel: str = "Drift (1 - CKA)",
+    interaction_ci: Optional[Tuple[float, float]] = None,
+    interaction_p: Optional[float] = None,
+    show_additive_prediction: bool = True,
+    interaction_n_bootstrap: Optional[int] = None,
 ) -> plt.Figure:
     """Bar plot of the 2x2 factorial cells with the interaction term.
+
+    Values must be in drift orientation (higher = more drift), so that
+    ``I = D - B - C + A > 0`` is superadditive. The additive prediction for
+    D (``B + C - A``) is drawn as a dashed line over the D bar; the gap
+    between the bar and the line is ``I``.
 
     Parameters
     ----------
@@ -35,6 +83,17 @@ def plot_interaction_bar(
         Plot title.
     save_path:
         If given, save the figure.
+    ylabel:
+        Y-axis label naming the drift metric.
+    interaction_ci:
+        Optional (lower, upper) bootstrap CI of ``I`` for the annotation.
+    interaction_p:
+        Optional one-sided p-value (H0: I <= 0) for the annotation.
+    show_additive_prediction:
+        Draw the additive prediction ``B + C - A`` over the D bar.
+    interaction_n_bootstrap:
+        Number of bootstrap replicates behind ``interaction_p``. A p-value
+        of 0 is then shown as ``p < 1/n_bootstrap``.
 
     Returns
     -------
@@ -43,12 +102,7 @@ def plot_interaction_bar(
     set_publication_style()
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
-    labels_map = {
-        "A": "IID + Dense",
-        "B": "Non-IID + Dense",
-        "C": "IID + Community",
-        "D": "Non-IID + Community",
-    }
+    labels_map = CELL_LABELS
     cell_keys = ["A", "B", "C", "D"]
     x = np.arange(len(cell_keys))
     means = [cell_means.get(k, 0) for k in cell_keys]
@@ -67,13 +121,39 @@ def plot_interaction_bar(
 
     ax.set_xticks(x)
     ax.set_xticklabels([labels_map[k] for k in cell_keys], rotation=15, ha="right")
-    ax.set_ylabel("Cross-Community CKA Drift")
+    ax.set_ylabel(ylabel)
     ax.set_title(title)
+    tops = [
+        (cell_cis[k][1] if cell_cis and k in cell_cis else cell_means.get(k, 0))
+        for k in cell_keys
+    ]
+    top = max(max(tops), max(means), 0.0)
+    bottom = min(min(means), 0.0)
+    if top > bottom:
+        # Leave the upper ~35% of the axes free for the legend and annotation.
+        ax.set_ylim(bottom, bottom + (top - bottom) / 0.65)
+
+    if show_additive_prediction and all(k in cell_means for k in cell_keys):
+        additive = cell_means["B"] + cell_means["C"] - cell_means["A"]
+        ax.hlines(
+            additive, x[3] - 0.45, x[3] + 0.45,
+            colors="black", linestyles="--", linewidth=1.5,
+            label="Additive prediction (B + C - A)",
+        )
+        ax.legend(loc="upper left")
 
     if interaction_I is not None:
+        text = f"I = {interaction_I:.4g}"
+        if interaction_ci is not None:
+            text += f"\n95% CI [{interaction_ci[0]:.4g}, {interaction_ci[1]:.4g}]"
+        if interaction_p is not None:
+            if interaction_p == 0 and interaction_n_bootstrap:
+                text += f"\np (I ≤ 0) < {1.0 / interaction_n_bootstrap:.1g}"
+            else:
+                text += f"\np (I ≤ 0) = {interaction_p:.3g}"
         ax.text(
             0.95, 0.95,
-            f"I = {interaction_I:.4f}",
+            text,
             transform=ax.transAxes,
             ha="right", va="top",
             fontsize=12, fontweight="bold",
@@ -92,22 +172,23 @@ def plot_factorial_grid(
     results_df,
     data_col: str = "data_regime",
     network_col: str = "network_regime",
-    metric_col: str = "final_cka_cross_community",
-    title: str = "Factorial Grid: CKA Drift",
+    drift_metric: Optional[DriftMetric] = None,
+    title: Optional[str] = None,
     save_path: Optional[str] = None,
 ) -> plt.Figure:
-    """Grid plot showing metric means for all factor-level combinations.
+    """Heatmap of mean drift for all factor-level combinations.
 
     Parameters
     ----------
     results_df:
-        DataFrame with factor and metric columns.
+        Run summaries with factor columns and ``drift_metric.column``.
     data_col, network_col:
         Factor columns.
-    metric_col:
-        Metric column.
+    drift_metric:
+        Metric to show, converted to drift orientation (higher = more
+        drift). Defaults to CKA, shown as ``1 - CKA``.
     title:
-        Plot title.
+        Plot title (default names the metric).
     save_path:
         If given, save the figure.
 
@@ -116,19 +197,24 @@ def plot_factorial_grid(
     The matplotlib Figure.
     """
     set_publication_style()
-    import pandas as pd
+    metric = drift_metric or resolve_drift_metric()
+    if metric.column not in results_df.columns:
+        raise ValueError(f"Missing column in summaries: {metric.column}")
+    df = results_df[results_df[metric.column].notna()].copy()
+    df["_drift"] = metric.to_drift(df[metric.column])
 
-    pivot = results_df.pivot_table(
-        values=metric_col, index=data_col, columns=network_col, aggfunc="mean",
+    pivot = df.pivot_table(
+        values="_drift", index=data_col, columns=network_col, aggfunc="mean",
     )
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 6))
     import seaborn as sns
     sns.heatmap(
-        pivot, ax=ax, annot=True, fmt=".4f",
+        pivot, ax=ax, annot=True, fmt=".3g",
         cmap="YlOrRd", linewidths=0.5, square=True,
+        cbar_kws={"label": metric.label},
     )
-    ax.set_title(title)
+    ax.set_title(title or f"Factorial Grid: Mean {metric.label}")
     ax.set_xlabel("Network Regime")
     ax.set_ylabel("Data Regime")
 

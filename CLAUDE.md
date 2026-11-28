@@ -140,6 +140,7 @@ python scripts/run_analysis.py --results_dir outputs/core_factorial --metric mmd
 
 # Generate figures
 python scripts/run_visualization.py --results_dir outputs/core_factorial
+python scripts/run_visualization.py --results_dir outputs/core_factorial --metric mmd
 ```
 
 ## Common extension points

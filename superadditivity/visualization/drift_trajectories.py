@@ -21,6 +21,7 @@ def plot_drift_trajectories(
     save_path: Optional[str] = None,
     ax: Optional[plt.Axes] = None,
     show_ci: bool = True,
+    ylabel: Optional[str] = None,
 ) -> plt.Figure:
     """Plot drift metric trajectories for multiple conditions.
 
@@ -41,6 +42,8 @@ def plot_drift_trajectories(
         Optional axes.
     show_ci:
         If True and trajectories have multiple seeds, show 95% CI band.
+    ylabel:
+        Y-axis label. Defaults to ``"Cross-Community {metric_name}"``.
 
     Returns
     -------
@@ -73,7 +76,7 @@ def plot_drift_trajectories(
             )
 
     ax.set_xlabel("Communication Round")
-    ax.set_ylabel(f"Cross-Community {metric_name}")
+    ax.set_ylabel(ylabel or f"Cross-Community {metric_name}")
     ax.set_title(title or f"{metric_name} Drift Trajectories")
     ax.legend(loc="best")
 

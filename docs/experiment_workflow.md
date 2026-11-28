@@ -350,14 +350,23 @@ is a distance and is used as is. Metrics are defined in
 
 ```bash
 python scripts/run_visualization.py --results_dir outputs/core_factorial
+
+# Same figures for paired MMD (output: <results_dir>/figures_mmd/)
+python scripts/run_visualization.py --results_dir outputs/core_factorial --metric mmd
 ```
+
+Figures show drift (higher = more drift): CKA as `1 − CKA`, MMD as is, matching
+the analysis. `--metric` and `--orientation` work as in `run_analysis.py`, and
+`--layer` picks the trajectory layer (default `layer4`). Run `run_analysis.py`
+with the same `--metric` first so that the interaction bar chart can show the
+bootstrap CI and p-value. Without it the chart shows only I.
 
 **Visualization modules** (under [`superadditivity/visualization/`](../superadditivity/visualization/)):
 
 | File | Figure |
 |------|--------|
-| [`interaction_plots.py`](../superadditivity/visualization/interaction_plots.py) | 2×2 factorial grid showing drift per cell |
-| [`drift_trajectories.py`](../superadditivity/visualization/drift_trajectories.py) | CKA drift over training rounds |
+| [`interaction_plots.py`](../superadditivity/visualization/interaction_plots.py) | Factorial grid of mean drift; 2×2 bar chart with additive prediction and I |
+| [`drift_trajectories.py`](../superadditivity/visualization/drift_trajectories.py) | Drift over training rounds, per factorial cell |
 | [`interaction_surface.py`](../superadditivity/visualization/interaction_surface.py) | 3-D surface of I(α,β) |
 | [`cka_heatmaps.py`](../superadditivity/visualization/cka_heatmaps.py) | Layer-wise CKA heatmaps |
 | [`topology_plots.py`](../superadditivity/visualization/topology_plots.py) | Graph topology diagrams |
@@ -365,13 +374,14 @@ python scripts/run_visualization.py --results_dir outputs/core_factorial
 | [`pout_sweep_plots.py`](../superadditivity/visualization/pout_sweep_plots.py) | I vs p_out line plots |
 | [`figure_style.py`](../superadditivity/visualization/figure_style.py) | Publication-quality matplotlib style |
 
-**Outputs** (written to `outputs/<experiment_name>/figures/`):
+**Outputs** (written to `outputs/<experiment_name>/figures/` for CKA, `figures_<metric>/` otherwise):
 
 | File | Contents |
 |------|----------|
-| `factorial_grid.pdf` | Main 2×2 interaction figure |
-| `drift_trajectories.pdf` | Per-condition drift curves |
-| `interaction_surface.pdf` | I(α,β) surface (if surface data exists) |
+| `factorial_grid.pdf` | Mean drift for every data × network combination |
+| `interaction_bar.pdf` | 2×2 cells (mean ± 95% CI), additive prediction B + C − A over cell D, I with bootstrap CI and p (2×2 results only) |
+| `drift_trajectories.pdf` | Mean drift per cell over training rounds (± 95% CI across runs) |
+| `interaction_surface.pdf` | I(α,β) surface (if surface data for the same metric exists) |
 
 ---
 

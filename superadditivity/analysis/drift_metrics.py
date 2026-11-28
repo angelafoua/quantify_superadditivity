@@ -19,6 +19,7 @@ method, ``network_regime`` = the graph topology), and from the older
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional
 
@@ -47,12 +48,17 @@ class DriftMetric:
         (drift = value).
     description:
         Human-readable description for reports.
+    trajectory_key:
+        Per-round key in ``drift_metrics.h5`` (``metrics/<key>/values``),
+        with ``{layer}`` as a placeholder for the layer name. ``None`` if
+        the metric has no per-round trajectory.
     """
 
     name: str
     column: str
     orientation: str
     description: str
+    trajectory_key: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.orientation not in ORIENTATIONS:
@@ -77,6 +83,19 @@ class DriftMetric:
                          dtype=np.float64)
         return 1.0 - arr if self.orientation == SIMILARITY else arr
 
+    def h5_key(self, layer: str) -> Optional[str]:
+        """Per-round HDF5 metric key for ``layer`` (``None`` if unavailable)."""
+        if self.trajectory_key is None:
+            return None
+        return self.trajectory_key.format(layer=layer)
+
+    @property
+    def label(self) -> str:
+        """Axis label for plots, e.g. ``"Drift (1 - CKA)"``."""
+        if self.orientation == SIMILARITY:
+            return f"Drift (1 - {self.name.upper() if self.name in DRIFT_METRICS else self.name})"
+        return f"Drift ({self.name.upper() if self.name in DRIFT_METRICS else self.name})"
+
     @property
     def drift_definition(self) -> str:
         """Formula relating drift to the raw column, for reports."""
@@ -95,6 +114,7 @@ DRIFT_METRICS: Dict[str, DriftMetric] = {
             "Primary-layer linear CKA between community-averaged embeddings "
             "(mean off-diagonal), final round"
         ),
+        trajectory_key="cka_{layer}_mean",
     ),
     "mmd": DriftMetric(
         name="mmd",
@@ -104,6 +124,7 @@ DRIFT_METRICS: Dict[str, DriftMetric] = {
             "Primary-layer client-level paired MMD^2, between-community minus "
             "within-community mean (B - W), median-heuristic bandwidth, final round"
         ),
+        trajectory_key="mmd_paired_{layer}_drift",
     ),
 }
 
@@ -156,12 +177,43 @@ def resolve_drift_metric(
         column=metric,
         orientation=orientation,
         description=f"Summary column {metric} ({orientation})",
+        # A final_<key> summary column is the last value of metrics/<key>.
+        trajectory_key=metric[len("final_"):] if metric.startswith("final_") else None,
     )
+
+
+def output_subdir(metric: DriftMetric, base: str) -> str:
+    """Name of a per-metric output folder: ``base`` for CKA, else ``base_<metric>``.
+
+    Parameters
+    ----------
+    metric:
+        The drift metric.
+    base:
+        Base folder name, e.g. ``"analysis"`` or ``"figures"``.
+
+    Returns
+    -------
+    str
+        Folder name (no path).
+    """
+    if metric.name == DEFAULT_METRIC:
+        return base
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", metric.name)
+    return f"{base}_{safe}"
 
 
 # ----------------------------------------------------------------------
 # Factorial cells
 # ----------------------------------------------------------------------
+
+#: Display labels for the factorial cells.
+CELL_LABELS = {
+    "A": "IID + Dense",
+    "B": "Non-IID + Dense",
+    "C": "IID + Community",
+    "D": "Non-IID + Community",
+}
 
 #: Topologies treated as the dense (no community structure) level.
 DENSE_TOPOLOGIES = frozenset({"erdos_renyi", "er", "dense", "complete"})

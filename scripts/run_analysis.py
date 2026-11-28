@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
-import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -32,6 +31,7 @@ from superadditivity.analysis.drift_metrics import (
     DRIFT_METRICS,
     ORIENTATIONS,
     DriftMetric,
+    output_subdir,
     resolve_drift_metric,
 )
 from superadditivity.analysis.anova import two_way_anova, functional_anova
@@ -74,10 +74,7 @@ def _summaries_fingerprint(
 
 def default_output_dir(results_dir: str, metric: DriftMetric) -> str:
     """``<results_dir>/analysis`` for CKA, ``analysis_<metric>`` otherwise."""
-    if metric.name == DEFAULT_METRIC:
-        return str(Path(results_dir) / "analysis")
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", metric.name)
-    return str(Path(results_dir) / f"analysis_{safe}")
+    return str(Path(results_dir) / output_subdir(metric, "analysis"))
 
 
 def _metric_section(metric: DriftMetric) -> str:

@@ -164,37 +164,58 @@ class ResultAggregator:
 
     def load_trajectories(
         self,
-        metric: str = "cka",
-        layer: str = "layer4",
-    ) -> Dict[str, np.ndarray]:
-        """Load HDF5 metric trajectories keyed by run directory name.
+        metric_key: str,
+    ) -> List[Dict[str, Any]]:
+        """Load one per-round metric from every run's ``drift_metrics.h5``.
 
         Parameters
         ----------
-        metric:
-            Metric name (e.g. ``"cka"``, ``"rsa"``).
-        layer:
-            Layer name (e.g. ``"layer4"``).
+        metric_key:
+            Key as recorded by the drift tracker, e.g. ``"cka_layer4_mean"``
+            or ``"mmd_paired_layer4_drift"``. Read from
+            ``metrics/<metric_key>/values`` and ``.../rounds``.
 
         Returns
         -------
-        dict mapping run-directory name → trajectory array.
+        list of dict
+            One entry per run that has the key, with ``"run_dir"``,
+            ``"rounds"`` and ``"values"`` (1-D arrays), and
+            ``"data_regime"`` / ``"network_regime"`` from the run's
+            ``summary.json`` (``None`` if absent).
         """
-        key = f"metrics/{metric}/{layer}"
-        trajectories: Dict[str, np.ndarray] = {}
-
+        runs: List[Dict[str, Any]] = []
         for h5_path in sorted(self.results_dir.rglob("drift_metrics.h5")):
-            run_name = h5_path.parent.name
             try:
-                arr = read_hdf5_dataset(h5_path, key)
-                trajectories[run_name] = arr
-            except (KeyError, Exception) as e:
-                logger.debug("No key %s in %s: %s", key, h5_path, e)
+                values = np.asarray(
+                    read_hdf5_dataset(h5_path, f"metrics/{metric_key}/values"),
+                    dtype=np.float64,
+                )
+                rounds = np.asarray(
+                    read_hdf5_dataset(h5_path, f"metrics/{metric_key}/rounds")
+                )
+            except Exception as e:
+                logger.debug("No key %s in %s: %s", metric_key, h5_path, e)
+                continue
+            if values.ndim != 1:
+                logger.debug("%s in %s is not a scalar trajectory", metric_key, h5_path)
+                continue
+            summary_path = h5_path.parent / "summary.json"
+            summary: Dict[str, Any] = {}
+            if summary_path.exists():
+                try:
+                    summary = load_json(summary_path)
+                except Exception as e:
+                    logger.debug("Could not read %s: %s", summary_path, e)
+            runs.append({
+                "run_dir": str(h5_path.parent),
+                "rounds": rounds,
+                "values": values,
+                "data_regime": summary.get("data_regime"),
+                "network_regime": summary.get("network_regime"),
+            })
 
-        logger.info(
-            "Loaded %d trajectories for %s/%s", len(trajectories), metric, layer
-        )
-        return trajectories
+        logger.info("Loaded %d trajectories for %s", len(runs), metric_key)
+        return runs
 
     def build_factorial_table(
         self,
