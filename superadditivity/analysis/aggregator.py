@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from superadditivity.analysis.drift_metrics import (
+    DriftMetric,
+    assign_factorial_cells,
+    resolve_drift_metric,
+)
 from superadditivity.utils.io import load_json, read_hdf5_dataset
 
 logger = logging.getLogger(__name__)
@@ -85,7 +90,10 @@ class ResultAggregator:
                     data["dirichlet_alpha"] = _alpha_map.get(data["data_regime"])
 
                 # Backfill final drift metrics from drift_metrics.h5 when absent.
-                if "final_cka_cross_community" not in data:
+                if (
+                    "final_cka_cross_community" not in data
+                    or "final_mmd_paired_drift" not in data
+                ):
                     data = self._backfill_drift_metrics(data, summary_path.parent)
 
                 records.append(data)
@@ -129,7 +137,7 @@ class ResultAggregator:
                         continue
                     arr = values_ds[()]
                     if arr.ndim == 1 and len(arr) > 0:
-                        data[f"final_{key}"] = float(arr[-1])
+                        data.setdefault(f"final_{key}", float(arr[-1]))
 
                 # Alias the deepest CKA layer mean as the canonical column.
                 # The primary layer is the second-to-last in sorted order
@@ -141,7 +149,14 @@ class ResultAggregator:
                     if values_ds is not None:
                         arr = values_ds[()]
                         if arr.ndim == 1 and len(arr) > 0:
-                            data["final_cka_cross_community"] = float(arr[-1])
+                            data.setdefault(
+                                "final_cka_cross_community", float(arr[-1])
+                            )
+                    # Alias paired MMD drift on the same primary layer.
+                    layer = primary_key[len("cka_"):-len("_mean")]
+                    mmd_key = f"final_mmd_paired_{layer}_drift"
+                    if mmd_key in data:
+                        data.setdefault("final_mmd_paired_drift", data[mmd_key])
         except Exception as exc:
             logger.debug("Could not backfill from %s: %s", h5_path, exc)
 
@@ -185,23 +200,50 @@ class ResultAggregator:
         self,
         data_col: str = "data_regime",
         network_col: str = "network_regime",
-        metric_col: str = "final_cka_cross_community",
+        drift_metric: Optional[DriftMetric] = None,
     ) -> pd.DataFrame:
-        """Build a table suitable for factorial ANOVA.
+        """Build a table suitable for factorial ANOVA and the interaction test.
 
-        Returns a DataFrame with columns: ``[data_regime, network_regime, metric, run_seed, graph_seed]``.
+        Parameters
+        ----------
+        data_col, network_col:
+            Summary columns holding the two factors.
+        drift_metric:
+            Metric to analyse; defaults to CKA. The ``metric`` column is in
+            drift orientation (higher = more drift, see
+            :mod:`superadditivity.analysis.drift_metrics`), and the raw
+            value is kept in ``metric_raw``.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns ``[data_regime, network_regime, metric, metric_raw,
+            cell, run_seed, graph_seed]``. ``cell`` is A/B/C/D. Runs
+            missing the metric are dropped with a warning.
         """
+        metric = drift_metric or resolve_drift_metric()
         df = self.load_summaries()
         if df.empty:
             return df
 
-        required = [data_col, network_col, metric_col]
+        required = [data_col, network_col, metric.column]
         missing = [c for c in required if c not in df.columns]
         if missing:
             raise ValueError(f"Missing columns in summaries: {missing}")
 
-        out = df[[data_col, network_col, metric_col]].copy()
-        out.columns = ["data_regime", "network_regime", "metric"]
+        n_before = len(df)
+        df = df[df[metric.column].notna()]
+        if len(df) < n_before:
+            logger.warning(
+                "%d of %d runs have no %s and are excluded",
+                n_before - len(df), n_before, metric.column,
+            )
+
+        out = df[[data_col, network_col]].copy()
+        out.columns = ["data_regime", "network_regime"]
+        out["metric_raw"] = df[metric.column].astype(np.float64)
+        out["metric"] = metric.to_drift(out["metric_raw"])
+        out["cell"] = assign_factorial_cells(out)
 
         for seed_col in ["run_seed", "graph_seed"]:
             if seed_col in df.columns:

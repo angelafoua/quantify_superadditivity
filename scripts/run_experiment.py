@@ -394,6 +394,12 @@ def run(cfg: DictConfig) -> dict:
         traj = drift_tracker.get_trajectory(cka_key)
         if len(traj) > 0:
             final_drift_metrics["final_cka_cross_community"] = float(traj[-1])
+    # Alias the primary-layer paired-MMD drift (B - W) likewise.
+    mmd_key = f"mmd_paired_{primary_layer}_drift"
+    if mmd_key in drift_tracker._recorded_keys:
+        traj = drift_tracker.get_trajectory(mmd_key)
+        if len(traj) > 0:
+            final_drift_metrics["final_mmd_paired_drift"] = float(traj[-1])
 
     summary = {
         "experiment_name": cfg.experiment_name,

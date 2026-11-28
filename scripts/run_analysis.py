@@ -2,8 +2,16 @@
 
 Usage:
     python scripts/run_analysis.py --results_dir outputs/core_factorial
+    python scripts/run_analysis.py --results_dir outputs/core_factorial --metric mmd
     python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surface
     python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surface --force
+    python scripts/run_analysis.py --results_dir outputs/core_factorial \
+        --metric final_mmd_paired_layer4_drift_bw0p5 --orientation distance
+
+All analyses run on *drift* (higher = more drift): CKA is converted with
+``1 - CKA``; MMD is used as is. See superadditivity/analysis/drift_metrics.py.
+Output goes to ``<results_dir>/analysis`` for CKA and
+``<results_dir>/analysis_<metric>`` otherwise.
 """
 
 from __future__ import annotations
@@ -11,12 +19,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from superadditivity.analysis.aggregator import ResultAggregator
+from superadditivity.analysis.drift_metrics import (
+    DEFAULT_METRIC,
+    DRIFT_METRICS,
+    ORIENTATIONS,
+    DriftMetric,
+    resolve_drift_metric,
+)
 from superadditivity.analysis.anova import two_way_anova, functional_anova
 from superadditivity.analysis.effect_sizes import bootstrap_ci
 from superadditivity.analysis.interaction_analyzer import InteractionAnalyzer
@@ -43,12 +60,34 @@ def _find_summaries(results_dir: str) -> list:
     return found
 
 
-def _summaries_fingerprint(results_dir: str) -> str:
-    """Hash all summary.json files in the results tree for change detection."""
+def _summaries_fingerprint(
+    results_dir: str, metric: Optional[DriftMetric] = None
+) -> str:
+    """Hash all summary.json files (and the metric) for change detection."""
+    metric = metric or resolve_drift_metric()
     md5 = hashlib.md5()
+    md5.update(f"{metric.column}|{metric.orientation}".encode())
     for p in _find_summaries(results_dir):
         md5.update(p.read_bytes())
     return md5.hexdigest()
+
+
+def default_output_dir(results_dir: str, metric: DriftMetric) -> str:
+    """``<results_dir>/analysis`` for CKA, ``analysis_<metric>`` otherwise."""
+    if metric.name == DEFAULT_METRIC:
+        return str(Path(results_dir) / "analysis")
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", metric.name)
+    return str(Path(results_dir) / f"analysis_{safe}")
+
+
+def _metric_section(metric: DriftMetric) -> str:
+    return (
+        f"- **Metric:** `{metric.name}`: {metric.description}\n"
+        f"- **Summary column:** `{metric.column}` ({metric.orientation})\n"
+        f"- **{metric.drift_definition}** (higher = more drift)\n"
+        f"- **Interaction:** I = Drift(D) - Drift(B) - Drift(C) + Drift(A); "
+        f"I > 0 is superadditive drift"
+    )
 
 
 _EXPECTED_ANALYSIS_FILES = [
@@ -57,7 +96,9 @@ _EXPECTED_ANALYSIS_FILES = [
 ]
 
 
-def _is_analysis_current(output_dir: str, results_dir: str) -> bool:
+def _is_analysis_current(
+    output_dir: str, results_dir: str, metric: Optional[DriftMetric] = None
+) -> bool:
     """Return True if analysis output was produced from the current summaries.
 
     Also checks that expected output files still exist — a matching
@@ -69,7 +110,7 @@ def _is_analysis_current(output_dir: str, results_dir: str) -> bool:
         return False
     try:
         saved = stamp.read_text().strip()
-        if saved != _summaries_fingerprint(results_dir):
+        if saved != _summaries_fingerprint(results_dir, metric):
             return False
     except Exception:
         return False
@@ -82,9 +123,11 @@ def _is_analysis_current(output_dir: str, results_dir: str) -> bool:
     return True
 
 
-def _write_fingerprint(output_dir: str, results_dir: str) -> None:
+def _write_fingerprint(
+    output_dir: str, results_dir: str, metric: Optional[DriftMetric] = None
+) -> None:
     stamp = Path(output_dir) / ".analysis_fingerprint"
-    stamp.write_text(_summaries_fingerprint(results_dir))
+    stamp.write_text(_summaries_fingerprint(results_dir, metric))
 
 
 def _invalidate_fingerprint(output_dir: str) -> None:
@@ -94,23 +137,42 @@ def _invalidate_fingerprint(output_dir: str) -> None:
         stamp.unlink()
 
 
-def run_factorial_analysis(results_dir: str, output_dir: str) -> None:
-    """Run the full 2×2 factorial analysis with interaction test."""
+def run_factorial_analysis(
+    results_dir: str,
+    output_dir: str,
+    metric: Optional[DriftMetric] = None,
+) -> None:
+    """Run the full 2×2 factorial analysis with interaction test.
+
+    Parameters
+    ----------
+    results_dir:
+        Directory containing run summaries.
+    output_dir:
+        Where the report and ``interaction_test.json`` are written.
+    metric:
+        Drift metric to analyse (default: CKA, as ``1 - CKA``).
+    """
+    metric = metric or resolve_drift_metric()
     ensure_dir(output_dir)
     _invalidate_fingerprint(output_dir)
     agg = ResultAggregator(results_dir)
-    df = agg.build_factorial_table()
+    df = agg.build_factorial_table(drift_metric=metric)
 
     if df.empty:
         logger.error("No data found in %s", results_dir)
         return
 
-    logger.info("Loaded %d runs for factorial analysis", len(df))
+    logger.info(
+        "Loaded %d runs for factorial analysis of %s (%s)",
+        len(df), metric.name, metric.drift_definition,
+    )
 
     report = StatisticalReport(
-        title="Superadditivity Analysis Report",
+        title=f"Superadditivity Analysis Report ({metric.name})",
         output_path=str(Path(output_dir) / "statistical_report.md"),
     )
+    report.add_section("Drift Metric", _metric_section(metric))
 
     anova_result = two_way_anova(df)
     report.add_anova_results(anova_result)
@@ -130,35 +192,62 @@ def run_factorial_analysis(results_dir: str, output_dir: str) -> None:
     pairs = pairwise_ttests(groups)
     report.add_pairwise_results(pairs)
 
-    cell_keys = sorted(groups.keys())
-    if len(cell_keys) >= 4:
-        A_key = [k for k in cell_keys if "iid" in k.lower() and ("er" in k.lower() or "dense" in k.lower())]
-        B_key = [k for k in cell_keys if "noniid" in k.lower() and ("er" in k.lower() or "dense" in k.lower())]
-        C_key = [k for k in cell_keys if "iid" in k.lower() and ("sbm" in k.lower() or "community" in k.lower())]
-        D_key = [k for k in cell_keys if "noniid" in k.lower() and ("sbm" in k.lower() or "community" in k.lower())]
-
-        if A_key and B_key and C_key and D_key:
-            interaction_result = InteractionAnalyzer.bootstrap_interaction_test(
-                groups[A_key[0]], groups[B_key[0]],
-                groups[C_key[0]], groups[D_key[0]],
-                n_bootstrap=10000, seed=42,
-            )
-            report.add_interaction_results(interaction_result)
-            save_json(
-                {k: v for k, v in interaction_result.items() if k != "bootstrap_distribution"},
-                Path(output_dir) / "interaction_test.json",
-            )
+    # Cells are assigned in build_factorial_table (A/B/C/D); a design
+    # that is not 2x2 raises there instead of silently skipping the test.
+    cell_values = {c: df.loc[df["cell"] == c, "metric"].values for c in "ABCD"}
+    interaction_result = InteractionAnalyzer.bootstrap_interaction_test(
+        cell_values["A"], cell_values["B"], cell_values["C"], cell_values["D"],
+        n_bootstrap=10000, seed=42,
+    )
+    report.add_interaction_results(interaction_result)
+    cell_info = {}
+    for c in "ABCD":
+        rows = df[df["cell"] == c]
+        cell_info[c] = {
+            "data_regime": str(rows["data_regime"].iloc[0]),
+            "network_regime": str(rows["network_regime"].iloc[0]),
+            "n_runs": int(len(rows)),
+            "mean_drift": float(rows["metric"].mean()),
+            "mean_raw": float(rows["metric_raw"].mean()),
+        }
+    save_json(
+        {
+            **{k: v for k, v in interaction_result.items()
+               if k != "bootstrap_distribution"},
+            "metric": metric.name,
+            "metric_column": metric.column,
+            "orientation": metric.orientation,
+            "drift_definition": metric.drift_definition,
+            "cells": cell_info,
+        },
+        Path(output_dir) / "interaction_test.json",
+    )
 
     me_result = fit_mixed_effects(df)
     report.add_section("Mixed-Effects Model", me_result["summary"])
 
     report.save()
-    _write_fingerprint(output_dir, results_dir)
+    _write_fingerprint(output_dir, results_dir, metric)
     logger.info("Analysis complete. Report: %s", report.output_path)
 
 
-def run_surface_analysis(results_dir: str, output_dir: str) -> None:
-    """Compute and fit the I(alpha, beta) interaction surface."""
+def run_surface_analysis(
+    results_dir: str,
+    output_dir: str,
+    metric: Optional[DriftMetric] = None,
+) -> None:
+    """Compute and fit the I(alpha, beta) interaction surface.
+
+    Parameters
+    ----------
+    results_dir:
+        Directory containing run summaries.
+    output_dir:
+        Where ``interaction_surface.json`` and the report are written.
+    metric:
+        Drift metric to analyse (default: CKA, as ``1 - CKA``).
+    """
+    metric = metric or resolve_drift_metric()
     _invalidate_fingerprint(output_dir)
     ensure_dir(output_dir)
     agg = ResultAggregator(results_dir)
@@ -167,8 +256,14 @@ def run_surface_analysis(results_dir: str, output_dir: str) -> None:
     if df.empty:
         logger.error("No data found in %s", results_dir)
         return
+    if metric.column not in df.columns:
+        raise ValueError(f"Missing column in summaries: {metric.column}")
 
-    sweep_data = InteractionAnalyzer.compute_sweep_interactions(df)
+    df = df[df[metric.column].notna()].copy()
+    df["_drift"] = metric.to_drift(df[metric.column])
+    sweep_data = InteractionAnalyzer.compute_sweep_interactions(
+        df, metric_col="_drift"
+    )
     if len(sweep_data["I_values"]) == 0:
         logger.warning("No sweep points computed.")
         return
@@ -185,16 +280,21 @@ def run_surface_analysis(results_dir: str, output_dir: str) -> None:
         "I_values": sweep_data["I_values"].tolist(),
         "fit_params": surface_fit["params"],
         "r_squared": surface_fit["r_squared"],
+        "metric": metric.name,
+        "metric_column": metric.column,
+        "orientation": metric.orientation,
+        "drift_definition": metric.drift_definition,
     }, Path(output_dir) / "interaction_surface.json")
 
     report = StatisticalReport(
-        title="Interaction Surface Analysis",
+        title=f"Interaction Surface Analysis ({metric.name})",
         output_path=str(Path(output_dir) / "surface_report.md"),
     )
+    report.add_section("Drift Metric", _metric_section(metric))
     report.add_surface_fit_results(surface_fit)
     report.save()
 
-    _write_fingerprint(output_dir, results_dir)
+    _write_fingerprint(output_dir, results_dir, metric)
     logger.info("Surface analysis complete. Output: %s", output_dir)
 
 
@@ -212,11 +312,30 @@ def main() -> None:
         "--force", action="store_true",
         help="Rerun analysis even if results haven't changed since last run.",
     )
+    parser.add_argument(
+        "--metric", default=DEFAULT_METRIC,
+        help=(
+            f"Drift metric: one of {sorted(DRIFT_METRICS)} or a raw summary "
+            f"column (then --orientation is required). Default: {DEFAULT_METRIC}."
+        ),
+    )
+    parser.add_argument(
+        "--orientation", default=None, choices=list(ORIENTATIONS),
+        help=(
+            "For a raw --metric column: 'similarity' (drift = 1 - value) or "
+            "'distance' (drift = value)."
+        ),
+    )
     args = parser.parse_args()
 
-    output_dir = args.output_dir or str(Path(args.results_dir) / "analysis")
+    try:
+        metric = resolve_drift_metric(args.metric, args.orientation)
+    except ValueError as exc:
+        parser.error(str(exc))
 
-    if not args.force and _is_analysis_current(output_dir, args.results_dir):
+    output_dir = args.output_dir or default_output_dir(args.results_dir, metric)
+
+    if not args.force and _is_analysis_current(output_dir, args.results_dir, metric):
         logger.info(
             "Analysis is up to date (summaries unchanged). "
             "Use --force to regenerate."
@@ -224,9 +343,9 @@ def main() -> None:
         return
 
     if args.analysis in ("factorial", "both"):
-        run_factorial_analysis(args.results_dir, output_dir)
+        run_factorial_analysis(args.results_dir, output_dir, metric)
     if args.analysis in ("surface", "both"):
-        run_surface_analysis(args.results_dir, output_dir)
+        run_surface_analysis(args.results_dir, output_dir, metric)
 
 
 if __name__ == "__main__":

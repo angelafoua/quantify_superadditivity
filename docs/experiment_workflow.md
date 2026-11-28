@@ -300,13 +300,32 @@ python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surfa
 
 # Both
 python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis both
+
+# Same analyses on paired MMD instead of CKA (output: <results_dir>/analysis_mmd/)
+python scripts/run_analysis.py --results_dir outputs/core_factorial --metric mmd
+
+# Any summary column, e.g. an MMD bandwidth-sensitivity variant
+python scripts/run_analysis.py --results_dir outputs/core_factorial \
+    --metric final_mmd_paired_layer4_drift_bw0p5 --orientation distance
 ```
+
+**Drift orientation.** Every analysis runs on *drift* (higher = more drift),
+so that I = Drift(D) − Drift(B) − Drift(C) + Drift(A) > 0 means superadditive
+drift. CKA is a similarity and is analysed as `1 − CKA` (CKA divergence); MMD
+is a distance and is used as is. Metrics are defined in
+[`drift_metrics.py`](../superadditivity/analysis/drift_metrics.py).
+
+**Factorial cells.** Runs are assigned to A/B/C/D from `data_regime`
+(`iid` vs any non-IID label) and `network_regime` (`erdos_renyi` = dense,
+`sbm`/`ring_of_cliques` = community). A results directory that is not exactly
+2×2 raises an error, and the interaction test is never skipped silently.
 
 **Analysis modules** (under [`superadditivity/analysis/`](../superadditivity/analysis/)):
 
 | File | Purpose |
 |------|---------|
 | [`aggregator.py`](../superadditivity/analysis/aggregator.py) | Load and aggregate `summary.json` files into a DataFrame |
+| [`drift_metrics.py`](../superadditivity/analysis/drift_metrics.py) | Metrics selectable with `--metric`, drift orientation, factorial cell assignment |
 | [`anova.py`](../superadditivity/analysis/anova.py) | Two-way ANOVA and permutation ANOVA (10,000 permutations) |
 | [`interaction_analyzer.py`](../superadditivity/analysis/interaction_analyzer.py) | Bootstrap I>0 test (10,000 resamples), p_out sweep aggregation, surface fitting |
 | [`effect_sizes.py`](../superadditivity/analysis/effect_sizes.py) | Bootstrap confidence intervals |
@@ -314,12 +333,12 @@ python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis both
 | [`mixed_effects.py`](../superadditivity/analysis/mixed_effects.py) | Linear mixed-effects model |
 | [`statistical_report.py`](../superadditivity/analysis/statistical_report.py) | Generates a Markdown report |
 
-**Outputs** (written to `outputs/<experiment_name>/analysis/`):
+**Outputs** (written to `outputs/<experiment_name>/analysis/` for CKA, `analysis_<metric>/` otherwise):
 
 | File | Contents |
 |------|----------|
 | `statistical_report.md` | Full analysis report |
-| `interaction_test.json` | Bootstrap I estimate, CI, and p-value |
+| `interaction_test.json` | Bootstrap I estimate, CI, p-value, metric and orientation used, per-cell run counts and means |
 | `interaction_surface.json` | α/β grid values and surface fit parameters |
 | `surface_report.md` | Surface fit summary |
 

@@ -105,6 +105,9 @@ else is library code under `superadditivity/`.
   code — Hydra will not error on unused keys, so keep them in sync.
 - Tests must run on CPU without dataset downloads (use synthetic fixtures in
   `tests/conftest.py`).
+- Analyses run on drift orientation (higher = more drift): similarity metrics
+  such as CKA enter as `1 - value`, so I > 0 means superadditive drift. Add new
+  analysable metrics in `superadditivity/analysis/drift_metrics.py`.
 
 ## Running things
 
@@ -133,6 +136,7 @@ python scripts/run_sweep.py --experiment robustness_check
 # Post-hoc analysis
 python scripts/run_analysis.py --results_dir outputs/core_factorial
 python scripts/run_analysis.py --results_dir outputs/pout_sweep --analysis surface
+python scripts/run_analysis.py --results_dir outputs/core_factorial --metric mmd   # paired MMD
 
 # Generate figures
 python scripts/run_visualization.py --results_dir outputs/core_factorial
